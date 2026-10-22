@@ -49,20 +49,20 @@ export function clubInsights(s,deadline,now=Date.now(),data=history){
  const median=responses.length?responses[Math.floor(responses.length/2)]:null;
  const findings=[];
  if(profileEvidence.length)findings.push({id:'lineup-pattern',direction:delta<-.03?'limits':delta>.03?'supports':'neutral',priority:Math.abs(delta)>.03?4:1,
-  observation:delta<-.03?'The mock profiles assigned to this lineup show a lower cancellation tendency than the simulated club baseline.':delta>.03?'The mock profiles assigned to this lineup show a higher cancellation tendency than the simulated club baseline.':'This lineup’s mock cancellation tendency is close to the simulated club baseline.',
-  evidence:`Lineup cancellation tendency: ${pct(rosterRate)}% vs simulated club baseline ${pct(baseline)}% (recency-adjusted, with an overall prior for sparse profiles).`,
+  observation:delta<-.03?'This lineup shows a lower cancellation tendency than the club baseline.':delta>.03?'This lineup shows a higher cancellation tendency than the club baseline.':'This lineup’s cancellation tendency is close to the club baseline.',
+  evidence:`Lineup cancellation tendency: ${pct(rosterRate)}% vs club baseline ${pct(baseline)}% (recency-adjusted, with an overall prior for sparse profiles).`,
   implication:delta<-.03?'Fewer cancellations from this lineup can limit new openings, even if there is plenty of time left.':delta>.03?'This lineup can create more opportunities than a steadier lineup, but an opening is not a confirmed booking.':'The lineup itself offers little advantage relative to the club baseline.'});
  if(futurePattern.length)findings.push({id:'deadline-overlap',direction:overlap<.5?'limits':'supports',priority:overlap<.5?5:2,
-  observation:overlap<.5?'Most still-relevant cancellation timings from the mock history fall after the user’s deadline.':'Most still-relevant cancellation timings from the mock history fall before the user’s deadline.',
+  observation:overlap<.5?'Most still-relevant cancellation timings from past records fall after the user’s deadline.':'Most still-relevant cancellation timings from past records fall before the user’s deadline.',
   evidence:`${beforeDeadline} of ${futurePattern.length} still-relevant historical cancellation timings fall before your deadline when aligned to this session.`,
   implication:overlap<.5?'A later opening would not help the user make plans by their selected time.':'There is still time for historically typical opportunities, but their occurrence is uncertain.'});
  if(canceled.length)findings.push({id:'cancellation-timing',direction:'context',priority:now>=s.cutoffAt?3:2,
-  observation:afterCutoff>canceled.length/2?'In the mock club history, most cancellations happened after registration closed.':'In the mock club history, cancellations were not predominantly after registration closed.',
-  evidence:`${afterCutoff} of ${canceled.length} mock cancellations happened after cutoff, across ${data.sessions.length} sessions.`,
+  observation:afterCutoff>canceled.length/2?'In past club records, most cancellations happened after registration closed.':'In past club records, cancellations were not predominantly after registration closed.',
+  evidence:`${afterCutoff} of ${canceled.length} cancellations happened after cutoff, across ${data.sessions.length} sessions.`,
   implication:afterCutoff>canceled.length/2?'Registration closing does not mean all potential opportunities have already passed.':'Some of the historical cancellation opportunities occurred before registration closed.'});
  if(now>=s.cutoffAt&&median!==null)findings.push({id:'response-pattern',direction:'limits',priority:4,
-  observation:'Accepting waiters in the mock history often responded promptly to offers.',
-  evidence:`Median response time among ${responses.length} accepting mock waiters: ${median} minutes.`,
+  observation:'Accepting waiters in past records often responded promptly to offers.',
+  evidence:`Median response time among ${responses.length} accepting waiters: ${median} minutes.`,
   implication:'After cutoff, responding before other waiters matters; a cancellation alone does not mean this user gets the spot.'});
  findings.sort((a,b)=>b.priority-a.priority);
  // Always ground the explanation in actual computed patterns; do not manufacture a causal attribution.
