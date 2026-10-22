@@ -64,3 +64,5 @@ For a two-account handoff: configure Full · 8 + 0, your role Confirmed player, 
 The controls can simulate fictional cancellation/acceptance, fast-forward a deadline, change presets, or reset the selected session. Reset all data clears registrations and test states across all sessions after confirmation. Chat messages remain. Old session action messages are rejected after reconfiguration. Legacy private test copies are archived on startup.
 
 Before cutoff, status and session details display an estimated $15–20 per person; after cutoff they display the configured fee. My status includes confirmed/capacity and waitlist counts. Confirmation prompts have a dismiss/keep-registration option.
+
+Before cutoff, canceled spots are automatically assigned to waitlisted players in registration order; promoted players receive a confirmation DM without needing to accept. Startup and periodic reconciliation also fill existing pre-cutoff vacancies. After cutoff, replacement offers still go to all waiters and the first valid acceptance wins.
