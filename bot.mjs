@@ -1,3 +1,4 @@
+import {finalizeBilling} from './billing.mjs';
 import fs from 'node:fs';
 import {makeTestSession,makeSharedTestSession,reminderRecipients,closeTestRegistration,simulateCancellation,simulateClaim,isFictional} from './testing.mjs';
 import {ensureUpcoming,TIME_ZONE} from './schedule.mjs';
@@ -31,7 +32,7 @@ const row=(...components)=>({type:1,components});
 const msg=(content,components=[])=>({content,components,allowed_mentions:{parse:[]}});
 const when=t=>Number.isFinite(t)?`<t:${Math.floor(t/1000)}:F>`:'Not configured';
 const policy='Before the registration cutoff, cancellations release your spot immediately and waitlisted players are automatically confirmed in waitlist registration order. After cutoff, we search for a replacement for up to 24 hours (or until the session starts). Your fee responsibility remains until someone accepts. After cutoff, all waitlisted players are notified; the first valid acceptance received by the bot wins. Discord contact is shared with your match only. Payments are settled directly, without collection or verification by this bot.';
-function details(s){return `**${s.title}**\nSession: ${when(s.startsAt)}\nRegistration cutoff: ${when(s.cutoffAt)}\nLocation: ${s.location}\n${Date.now()<s.cutoffAt?'Estimated fee: **$15–20 per person**':`Fee: **${s.fee}**`}`;}
+function details(s){return `**${s.title}**\nSession: ${when(s.startsAt)}\nRegistration cutoff: ${when(s.cutoffAt)}\nLocation: ${s.location}\n${Date.now()<s.cutoffAt?'Estimated fee: **$15–20 per person**':`Fee: **${s.billing?s.fee:'Final amount pending (USD)'}**`}`;}
 const liveId=(action,s)=>`${action}:${s.id}`;
 const shortDate=s=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'short',month:'short',day:'numeric'}).format(s.startsAt);
 function panel(){const sessions=upcoming();return msg(`🏸 **Wednesday Squash**\nEvery Wednesday · **8–10 PM America/New_York**\nRegistration cutoff: **Monday 3 PM ET**\n\n${sessions.map(s=>`${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waiting: **${s.waitlist.length}**`).join('\n\n')}\n\nChoose an action below, then select a session in your DMs. Session options are recalculated when you click.\n**Demo environment — no real booking or payment.**`,[row(btn('signup','Sign up',3),btn('cancel','Cancel registration',2),btn('status','My status',2))]);}
@@ -47,6 +48,12 @@ function sweep(now=Date.now()){
   for(const s of Object.values(state.sessions).filter(s=>!s.testRetired)){const players=promoteWaitlist(s,now);notifyPromotions(s,players);if(players.length)promotedAny=true;}
   for(const s of Object.values(state.sessions).filter(s=>!s.testRetired))for(const o of expire(s,now)){
     job({type:'dm',recipient:o.canceled.id,data:msg(`**No replacement found**\n${details(s)}\n\nThe replacement search has ended. Your original fee responsibility remains. No real payment is required in this demo.`)});queueClose(o);
+  }
+  for(const s of Object.values(state.sessions).filter(s=>!s.testRetired)){
+   if(finalizeBilling(s,{totalCents:Number(env.SESSION_TOTAL_COST_CENTS),payTo:env.ORGANIZER_PAYMENT_INFO},now)){
+    for(const recipient of s.billing.recipientIds)job({type:'dm',sessionId:s.id,recipient,data:msg(`📌 **Registration is now closed — you’re confirmed**\n${details(s)}\n\n**Confirmed players: ${s.billing.confirmedCount}**\nTotal court cost: **$${(s.billing.totalCents/100).toFixed(2)} USD**\n**Your share: ${s.fee}** (rounded to the nearest cent)\n**Send ${s.fee} to the organizer:**\n${s.billing.payTo}\n\nAfter cutoff, your fee responsibility remains until a replacement accepts.\nDemo only — do not send real money.`)});
+    promotedAny=true;
+   }
   }
   save();if(promotedAny)void refresh().catch(()=>console.log('Panel refresh deferred.'));
 }
@@ -149,7 +156,7 @@ async function testUI(i,p,action,reply){
  if(step==='preset'){if(!draft||draft.step!=='preset')throw Error('Start /test again.');draft.preset=value;draft.step='role';save();await reply(msg('**Your role**\nCounts include you. If a preset has no slot for your role, one is added.',[row(btn('test:role:participant','Confirmed player'),btn('test:role:waiter','Waitlisted player'),btn('test:role:none','Not registered'))]));return;}
  if(step==='role'){if(!draft||draft.step!=='role')throw Error('Start /test again.');draft.role=value;draft.step='phase';save();await reply(msg('**Registration phase**',[row(btn('test:phase:before','Before cutoff'),btn('test:phase:after','After cutoff'))]));return;}
  if(step==='phase'){if(!draft||draft.step!=='phase')throw Error('Start /test again.');draft.phase=value;draft.step='apply';const preview=makeTestSession(state.sessions[draft.sourceId],draft,p);save();await reply(msg(`**Apply this test?**\n${shortDate(state.sessions[draft.sourceId])} · ${value==='before'?'Before':'After'} cutoff\nConfirmed: **${preview.members.length}** · Waiting: **${preview.waitlist.length}**\nYour role: **${draft.role}**\n\nReplaces this date’s bookings, waitlist, and replacement searches for all accounts. Other dates are unchanged.`,[row(btn(`test:apply:${draft.key}`,'Apply test',3))]));return;}
- if(step==='apply'){if(!draft||draft.step!=='apply'||draft.key!==value)throw Error('This setup is outdated. Start /test again.');const source=state.sessions[draft.sourceId];const t=makeSharedTestSession(source,draft,p);closeSessionSearches(source);state.sessions[t.id]=t;state.sharedTestId=t.id;delete state.testDrafts[p.id];save();await refresh();await reply(testControls(t));void drain();return;}
+ if(step==='apply'){if(!draft||draft.step!=='apply'||draft.key!==value)throw Error('This setup is outdated. Start /test again.');const source=state.sessions[draft.sourceId];const t=makeSharedTestSession(source,draft,p);closeSessionSearches(source);state.sessions[t.id]=t;state.sharedTestId=t.id;delete state.testDrafts[p.id];sweep();save();await refresh();await reply(testControls(t));void drain();return;}
  const t=state.sessions[state.sharedTestId];if(!t||t.testRetired||!t.testShared)throw Error('Create a test with /test first.');
  if(step==='reset'){await reply(msg('**Reset this shared session?**\nThis clears this date’s registrations for all accounts and restores its normal Wednesday schedule. Other dates are unchanged.',[row(btn(`test:reset-confirm:${t.id}`,'Confirm reset',4))]));return;}
  if(step==='reset-confirm'){if(value!==t.id)throw Error('This reset is outdated.');closeSessionSearches(t);delete state.sessions[t.id];delete state.sharedTestId;upcoming();state.sessions[t.id].changedAt=Date.now();save();await refresh();await reply(msg('Shared session reset. Its normal Wednesday schedule is restored.',[row(btn('test','Create another test',3))]));return;}
@@ -160,7 +167,7 @@ async function testUI(i,p,action,reply){
   const recipients=reminderRecipients(t);for(const recipient of recipients)job({type:'dm',recipient,sessionId:t.id,data:msg(`⏰ **Registration cutoff reminder**\n${details(t)}\n\n**Please check your plans before ${when(t.cutoffAt)}.** Before cutoff, you can cancel immediately. After cutoff, your booking and fee responsibility remain until a replacement accepts.\nYour status: **${status(t,recipient)}**\nDemo reminder — no payment.`)});
   save();await reply(testControls(t,`Cutoff reminder queued for ${recipients.length} real player(s). No dates changed.`));void drain();return;
  }
- if(step==='cutoff'){closeTestRegistration(t);save();await refresh();await reply(testControls(t,'Registration closed now. Existing bookings are kept; future cancellations request replacements.'));return;}
+ if(step==='cutoff'){closeTestRegistration(t);sweep();save();await refresh();await reply(testControls(t,'Registration closed now. Existing bookings are kept; future cancellations request replacements.'));return;}
  if(step==='expire'){if(!t.openings.some(o=>o.status==='open'))throw Error('No active replacement search to expire. Close registration, then cancel a player first.');for(const o of t.openings)if(o.status==='open')o.expiresAt=Date.now();sweep();await refresh();await reply(testControls(t));void drain();return;}
  throw Error('Unknown test action.');
 }
