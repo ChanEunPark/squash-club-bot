@@ -20,7 +20,7 @@ The public session panel has **Sign up / Cancel registration / My status**. Regi
 
 ## Demo
 
-Use `/demo` or the reviewer channel's Start demo button. Each user gets an isolated fictional walkthrough covering pre-cutoff cancellation, successful post-cutoff replacement, another waiter winning, and fast-forwarding 24-hour expiry. The demo uses the same core functions; fictional participants and preview messages are clearly identified. No payment or other real accounts are required for this walkthrough. Multi-account live delivery is a separate integration check.
+Use `/demo`. Each user gets an isolated fictional walkthrough covering pre-cutoff cancellation, successful post-cutoff replacement, another waiter winning, and fast-forwarding 24-hour expiry. The demo uses the same core functions; fictional participants and preview messages are clearly identified. No payment or other real accounts are required for this walkthrough. Multi-account live delivery is a separate integration check.
 
 ## Configuration
 
@@ -57,8 +57,10 @@ No privileged Message Content or Server Members intents are used. Ordinary chat 
 
 ## Organizer-only testing
 
-Use `/test` in the server (Manage Server or Administrator permission required). Choose a Wednesday, headcount preset, your role, and before/after cutoff, then confirm Apply test. The test is an isolated copy, visible only to its owner via the normal Sign up / My status / Cancel registration actions. It never overwrites the Wednesday's real registrations.
+Use `/test` in `#test-controls` (Manage Server or Administrator permission required). Choose a Wednesday, headcount preset, your role, and before/after cutoff, then confirm Apply test. Applying a preset replaces that date's registrations and searches for every account. Other dates remain unchanged. All accounts then use the same canonical session through Sign up / My status / Cancel registration in `#squash-session` and their own DMs.
 
-Presets: empty (0/0), one spot left (7/0), full (8/0), replacement (8/2). Headcounts include your selected role; an otherwise missing role adds one slot and the preview shows final counts. Fictional participants do not receive network messages. Real owner DMs use the same delivery path as normal sessions.
+For a two-account handoff: configure Full · 8 + 0, your role Confirmed player, After cutoff. Sign in with a second account and join that date's waitlist. Cancel from the first account, then accept the offer from the second account's DM. Both accounts receive the settlement information. No real payment is required.
 
-Run `/test` again for controls: simulate a fictional player's cancellation, let a fictional waiter accept first, fast-forward open search deadlines, change the preset, or archive/reset your test. Reset requires confirmation and preserves real bookings. Previous test copies are retained as archived data and their old actions are rejected. The public roster remains the normal Wednesday roster; personal test results are labeled TEST.
+The controls can simulate fictional cancellation/acceptance, fast-forward a deadline, change presets, or reset the selected session. Reset all data clears registrations and test states across all sessions after confirmation. Chat messages remain. Old session action messages are rejected after reconfiguration. Legacy private test copies are archived on startup.
+
+Before cutoff, status and session details display an estimated $15–20 per person; after cutoff they display the configured fee. My status includes confirmed/capacity and waitlist counts. Confirmation prompts have a dismiss/keep-registration option.
