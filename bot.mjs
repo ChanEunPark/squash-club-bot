@@ -233,7 +233,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    const next=sessionsFor(p.id);
    const extra=Object.values(state.sessions).filter(s=>!s.testRetired&&(!s.testOwner||s.testOwner===p.id)&&s.startsAt>Date.now()&&!next.some(n=>n.id===s.id)&&(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id)));
    const sessions=[...next,...extra].slice(0,5);
-   const actions=sessions.map(s=>{const waiting=s.waitlist.some(u=>u.id===p.id),booked=s.members.some(u=>u.id===p.id);return row(btn(liveId(waiting?'status':booked?'cancel':'signup',s),`${shortDate(s)} · ${waiting?'View status':booked?'Cancel booking':'Book'}`,waiting?2:booked?4:3));});
+   const actions=sessions.map(s=>{const waiting=s.waitlist.some(u=>u.id===p.id),booked=s.members.some(u=>u.id===p.id);const buttons=[btn(liveId(waiting?'status':booked?'cancel':'signup',s),`${shortDate(s)} · ${waiting?'View status':booked?'Cancel booking':'Book'}`,waiting?2:booked?4:3)];if(waiting)buttons.push(btn(liveId('forecast-info',s),'About this estimate',2));return row(...buttons);});
    const data=msg('**My status**\nOnly you can see this. All times: America/New_York.',actions);
    data.embeds=await Promise.all(sessions.map(async s=>({title:shortDate(s),description:`${details(s)}\n\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\nYour status: **${status(s,p.id)}**${s.waitlist.some(u=>u.id===p.id)?`\n\n${await outlookText(s,p.id)}`:''}`,color:s.waitlist.some(u=>u.id===p.id)?0xe9b949:s.members.some(u=>u.id===p.id)?0x33a474:0x8792a2})));
    await reply(data);return;
