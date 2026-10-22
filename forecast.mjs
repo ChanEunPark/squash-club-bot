@@ -1,0 +1,101 @@
+import fs from 'node:fs';
+import {createHash} from 'node:crypto';
+export const history=JSON.parse(fs.readFileSync(new URL('./fixtures/forecast-history.json',import.meta.url),'utf8'));
+const HOUR=3600000;
+const hash=value=>parseInt(createHash('sha256').update(String(value)).digest('hex').slice(0,8),16);
+function rng(seed){return ()=>((seed=(Math.imul(seed,1664525)+1013904223)>>>0)/4294967296);}
+const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+// Every live identity maps to a FICTIONAL profile. No claim is made about that person's real history.
+export function profileFor(player,scenario='mixed',data=history){
+ const candidates=scenario==='mixed'?data.members:data.members.filter(p=>p.cohort===scenario);
+ if(!candidates.length)throw Error('Unknown mock scenario.');
+ return candidates.find(p=>p.id===player.forecastProfileId)||candidates[hash(player.id)%candidates.length];
+}
+function evidence(player,s,now,data){
+ const profile=profileFor(player,s.forecastScenario||'mixed',data);
+ const last=Math.max(...data.sessions.map(x=>x.startsAt));const sessionMap=new Map(data.sessions.map(x=>[x.id,x]));
+ const summarize=records=>{
+  let exposure=0,cancellations=0;const timings=[];
+  for(const r of records){const session=sessionMap.get(r.sessionId);const weight=2**(-(last-session.startsAt)/(16*7*24*HOUR));exposure+=weight;
+   if(r.canceledAt!==null){cancellations+=weight;timings.push({lead:(session.startsAt-r.canceledAt)/HOUR,weight});}
+  }return {exposure,cancellations,timings};
+ };
+ const all=summarize(data.records),own=summarize(data.records.filter(r=>r.memberId===profile.id));
+ const baseRate=all.cancellations/all.exposure;
+ const rate=(own.cancellations+6*baseRate)/(own.exposure+6);
+ // Mix individual timing evidence with a cohort-wide prior; do not overfit one cancellation.
+ const timings=[...own.timings,...all.timings.map(t=>({...t,weight:t.weight*6/all.exposure}))];
+ const total=timings.reduce((v,t)=>v+t.weight,0);
+ const remaining=timings.filter(t=>s.startsAt-t.lead*HOUR>now);
+ const futureWeight=remaining.reduce((v,t)=>v+t.weight,0);
+ const futureMass=total?futureWeight/total:0;
+ const conditionalRate=rate*futureMass/(1-rate+rate*futureMass);
+ return {rate:conditionalRate,timings:remaining};
+}
+function weightedSample(items,random){const total=items.reduce((v,t)=>v+t.weight,0);let value=random()*total;return items.find(t=>(value-=t.weight)<=0)||items.at(-1);}
+export function predictOutlook(s,userId,deadline,now=Date.now(),{data=history,trials=1800}={}){
+ const position=s.waitlist.findIndex(p=>p.id===userId);
+ if(position<0)return {available:false,reason:'not-waitlisted'};
+ if(!Number.isFinite(deadline)||deadline<=now||deadline>s.startsAt)return {available:false,reason:'deadline-passed-or-invalid'};
+ const evidenceList=s.members.map(p=>evidence(p,s,now,data));
+ const open=s.openings.filter(o=>o.status==='open'&&o.expiresAt>now);
+ const canceling=new Set(open.map(o=>o.canceled.id));
+ const seed=hash(JSON.stringify([s.id,s.members.map(p=>p.id),s.waitlist.map(p=>p.id),s.forecastScenario,open.map(o=>o.id),deadline,Math.floor(now/900000)]));
+ function simulate(multiplier){
+  const random=rng(seed);let successes=0;const times=[];
+  for(let trial=0;trial<trials;trial++){
+   const events=open.map(o=>({time:now,expires:o.expiresAt,eligible:new Set(o.eligible)}));
+   evidenceList.forEach((e,index)=>{
+    if(canceling.has(s.members[index].id)||!e.timings.length||random()>=clamp(e.rate*multiplier,0,1))return;
+    const timing=weightedSample(e.timings,random);const time=s.startsAt-timing.lead*HOUR;
+    if(time<=deadline)events.push({time,expires:Math.min(time+24*HOUR,s.startsAt),eligible:null});
+   });
+   const waiters=s.waitlist.map(p=>p.id),filledOffers=new Set();let won=false;
+   while(events.length){
+    events.sort((a,b)=>a.time-b.time);const event=events.shift();
+    if(event.time>deadline)break;
+    if(event.kind==='accept'){
+     if(filledOffers.has(event.offer)||!waiters.includes(event.id))continue;
+     filledOffers.add(event.offer);waiters.splice(waiters.indexOf(event.id),1);
+     if(event.id===userId){times.push(event.time);won=true;break;}
+    }else if(event.time<s.cutoffAt){
+     const winner=waiters.shift();if(winner===userId){times.push(event.time);won=true;break;}
+    }else{
+     // Competing responses are processed in time order, including overlapping offers.
+     const offer=event;
+     for(const id of waiters.filter(id=>!event.eligible||event.eligible.has(id))){
+      const r=data.responses[Math.floor(random()*data.responses.length)];const time=event.time+r.delayMinutes*60000;
+      if(r.accepted&&time<event.expires&&time<=deadline)events.push({kind:'accept',id,time,offer});
+     }
+    }
+   }
+   if(won)successes++;
+  }
+  times.sort((a,b)=>a-b);return {probability:successes/trials,times};
+ }
+ const base=simulate(1),low=simulate(.75),high=simulate(1.25);
+ const round=p=>Math.round(p*20)*5;
+ const minSamples=Math.min(...s.members.map(p=>data.records.filter(r=>r.memberId===profileFor(p,s.forecastScenario||'mixed',data).id).length));
+ return {available:true,synthetic:true,modelVersion:'conditional-cancellation-monte-carlo-v1',deadline,generatedAt:now,
+  chancePercent:round(base.probability),rangePercent:[round(Math.min(low.probability,base.probability)),round(Math.max(high.probability,base.probability))],
+  // Window is conditional on successful confirmation by the user's deadline, not an expected notification promise.
+  window:base.times.length>=30?{from:base.times[Math.floor(base.times.length*.2)],to:base.times[Math.floor(base.times.length*.8)]}:null,
+  queuePosition:now<s.cutoffAt?position+1:null,phase:now<s.cutoffAt?'before-cutoff':'after-cutoff',waiters:s.waitlist.length,
+  historicalSessions:data.sessions.length,minimumProfileSamples:Number.isFinite(minSamples)?minSamples:0,
+  uncertainty:'Unvalidated synthetic-data estimate. Range varies cancellation assumptions by ±25%; it is not a confidence interval.',
+  factors:[now<s.cutoffAt?'Waitlist registration order applies until cutoff.':'After cutoff, first valid acceptance wins; no queue priority.',
+   'Current participants are assigned fictional historical profiles for this demo; no real personal history is used.',
+   'Cancellation estimates use recency weighting, an overall prior for sparse profiles, and cancellation timing.',
+   'Response times are drawn from synthetic history, not your measured response speed.']};
+}
+export function parseDeadline(value,startsAt,now=Date.now()){
+ const match=/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})$/.exec(value.trim());
+ if(!match)throw Error('Use YYYY-MM-DD HH:mm in Eastern Time, for example 2026-10-28 17:00.');
+ const [,y,m,d,h,min]=match.map(Number);if(h>23||min>59||m<1||m>12||d<1||d>31)throw Error('Enter a valid date and time.');
+ const target=Date.UTC(y,m-1,d,h,min);let utc=target;
+ const parts=at=>Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(at).filter(p=>p.type!=='literal').map(p=>[p.type,Number(p.value)]));
+ for(let i=0;i<4;i++){const p=parts(utc);utc+=target-Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute);}
+ const p=parts(utc);if(p.year!==y||p.month!==m||p.day!==d||p.hour!==h||p.minute!==min)throw Error('That local date/time does not exist. Choose another time.');
+ const alternate=parts(utc+HOUR);if(alternate.year===y&&alternate.month===m&&alternate.day===d&&alternate.hour===h&&alternate.minute===min)throw Error('That Eastern time occurs twice during the clock change. Choose a different hour.');
+ if(utc<=now||utc>startsAt)throw Error('Choose a future deadline no later than the session start.');return utc;
+}
