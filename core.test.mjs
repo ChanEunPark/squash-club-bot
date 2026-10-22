@@ -1,27 +1,15 @@
-import { test } from 'node:test';
+import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import { newSession, join, cancel, accept } from './core.mjs';
-const p = id => ({id, name:id});
-test('only one waiter wins and existing players keep their fee', () => {
-  const s = newSession(); s.capacity=1;
-  join(s,p('paid')); join(s,p('a')); join(s,p('b'));
-  const o=cancel(s,'paid');
-  assert.equal(accept(s,o.id,'b').canceled.id,'paid');
-  assert.throws(()=>accept(s,o.id,'a'), /filled/);
-  assert.deepEqual(s.members.map(x=>x.id),['b']);
-  assert.equal(s.fee,'15,000 KRW (sample)');
-});
-test('unregistered users cannot claim, and withdrawing removes eligibility', () => {
-  const s=newSession();s.capacity=1;join(s,p('paid'));join(s,p('a'));
-  const o=cancel(s,'paid');
-  assert.throws(()=>accept(s,o.id,'outsider'),/registered/);
-  cancel(s,'a');assert.throws(()=>accept(s,o.id,'a'),/registered/);
-});
-test('multiple cancellations have separate handoffs and a winner cannot claim twice',()=>{
-  const s=newSession();s.capacity=2;
-  ['p1','p2','a','b'].forEach(id=>join(s,p(id)));
-  const one=cancel(s,'p1'),two=cancel(s,'p2');
-  assert.equal(accept(s,one.id,'a').canceled.id,'p1');
-  assert.throws(()=>accept(s,two.id,'a'));
-  assert.equal(accept(s,two.id,'b').canceled.id,'p2');
-});
+import {newSession,join,cancel,accept,expire,status,DAY,validateTimes} from './core.mjs';
+const p=id=>({id,name:id});
+function fixture(){const s=newSession({capacity:2,cutoffAt:100,startsAt:DAY*3});join(s,p('p1'),{now:1});join(s,p('p2'),{now:1});join(s,p('a'),{now:1,waitlist:true});join(s,p('b'),{now:1,waitlist:true});return s;}
+test('pre-cutoff cancellation releases booking immediately',()=>{const s=fixture();assert.equal(cancel(s,'p1',99).kind,'canceled');assert.equal(s.members.length,1);assert.equal(s.openings.length,0);});
+test('post-cutoff cancellation retains booking and responsibility',()=>{const s=fixture();const {opening:o}=cancel(s,'p1',100);assert.equal(s.members.length,2);assert.equal(o.expiresAt,100+DAY);assert.match(status(s,'p1'),/in progress/);assert.throws(()=>cancel(s,'p1',101),/already/);});
+test('only first valid acceptance wins, without increasing headcount',()=>{const s=fixture();const {opening:o}=cancel(s,'p1',100);assert.equal(accept(s,o.id,'b',101).canceled.id,'p1');assert.throws(()=>accept(s,o.id,'a',101),/closed/);assert.deepEqual(s.members.map(p=>p.id),['b','p2']);assert.equal(s.waitlist[0].id,'a');});
+test('24h expiry is strict even before scheduler runs; booking is retained',()=>{const s=fixture();const {opening:o}=cancel(s,'p1',100);assert.throws(()=>accept(s,o.id,'a',100+DAY),/closed/);assert.equal(expire(s,100+DAY).length,1);assert.equal(expire(s,100+DAY).length,0);assert.match(status(s,'p1'),/No replacement/);assert.equal(s.members[0].id,'p1');});
+test('offer expires at start if sooner than 24h',()=>{const s=fixture();s.startsAt=200;const {opening:o}=cancel(s,'p1',100);assert.equal(o.expiresAt,200);assert.throws(()=>accept(s,o.id,'a',200),/started/);assert.equal(expire(s,200).length,1);});
+test('separate cancellations match separately; same waiter cannot win twice',()=>{const s=fixture();const a=cancel(s,'p1',100).opening,b=cancel(s,'p2',100).opening;accept(s,a.id,'a',101);assert.throws(()=>accept(s,b.id,'a',102));assert.equal(accept(s,b.id,'b',102).canceled.id,'p2');});
+test('full session requires explicit waitlist consent',()=>{const s=fixture();assert.equal(join(s,p('c'),{now:2}),'needs-waitlist-consent');assert.equal(s.waitlist.length,2);assert.equal(join(s,p('c'),{now:2,waitlist:true}),'waitlisted');});
+test('outsiders and withdrawn waiters cannot claim',()=>{const s=fixture(),o=cancel(s,'p1',100).opening;assert.throws(()=>accept(s,o.id,'outsider',101));cancel(s,'a',101);assert.throws(()=>accept(s,o.id,'a',102));});
+test('restart preserves expiration and it fires once',()=>{const s=fixture();cancel(s,'p1',100);const restored=JSON.parse(JSON.stringify(s));assert.equal(expire(restored,DAY+100).length,1);assert.equal(expire(restored,DAY+101).length,0);});
+test('timezone and ordering validation',()=>{assert.throws(()=>validateTimes('2026-10-22T10:00','2026-10-23T10:00',0));assert.throws(()=>validateTimes('2026-10-23T10:00Z','2026-10-22T10:00Z',0));assert.equal(validateTimes('2026-10-22T10:00-04:00','2026-10-23T10:00-04:00',0).cutoffAt,Date.parse('2026-10-22T14:00Z'));});
