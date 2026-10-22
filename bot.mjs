@@ -72,6 +72,11 @@ const commands=[
 if(process.argv.includes('--register')){for(const c of commands)await api(`/applications/${env.DISCORD_APPLICATION_ID}/guilds/${env.DISCORD_GUILD_ID}/commands`,'POST',c);console.log('Commands registered.');process.exit(0);}
 const app=await api('/oauth2/applications/@me');if(app.id!==env.DISCORD_APPLICATION_ID)throw Error('Wrong application token.');if(app.interactions_endpoint_url)throw Error('Clear the Interactions Endpoint URL to use the Gateway.');
 for(const id of [env.DISCORD_SESSION_CHANNEL_ID,env.DISCORD_DEMO_CHANNEL_ID])if((await api(`/channels/${id}`)).guild_id!==env.DISCORD_GUILD_ID)throw Error('Channel/server mismatch.');
+if(process.argv.includes('--publish')){
+  await putPanel('session',env.DISCORD_SESSION_CHANNEL_ID,panel());
+  await putPanel('demo',env.DISCORD_DEMO_CHANNEL_ID,msg('**Try the booking and replacement flow**\nPrivately test pre-cutoff cancellation, successful replacement, another waiter winning, and 24-hour expiry. No payment required.',[row(btn('demo-start','Start demo',3))]));
+  console.log('Session and demo panels updated.');process.exit(0);
+}
 function manager(i){const p=BigInt(i.member?.permissions||0);if(!(p&32n)&&!(p&8n))throw Error('Only a server manager can do this.');}
 function person(i){const u=i.member?.user||i.user;return {id:u.id,name:u.global_name||u.username};}
 function demoStart(id){const key=crypto.randomUUID();state.demos[id]={key,stage:'choose'};save();return msg('**Choose a private demo**\nFictional players, no payment. These use the same booking rules as the session. The 24-hour timeout can be fast-forwarded here.',[row(btn(`demo:pre:${key}`,'Before cutoff'),btn(`demo:post:${key}`,'After cutoff'))]);}
