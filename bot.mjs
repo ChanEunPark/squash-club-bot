@@ -47,7 +47,7 @@ async function outlookText(s,id){
  const r=predictOutlook(s,id,pref.deadline);
  if(!r.available)return '**Your waitlist outlook**\nYour planning deadline has passed. You are still on the waitlist and may still receive offers. Update your deadline for a new outlook.';
  const explanation=await explainOutlook(r);
- const headline=r.chancePercent>=60?'You have a good chance of getting a spot before your deadline.':r.chancePercent>=30?'You may get a spot before your deadline, but keep a backup plan.':'Getting a spot before your deadline looks unlikely.';
+ const headline=r.chancePercent>=60?'You have a good chance of getting a spot before your deadline.':r.chancePercent>=50?'Your chances are uncertain. Keep a backup plan.':r.chancePercent>=30?'A spot is possible, but you’re more likely to remain waitlisted by your deadline.':'Getting a spot before your deadline looks unlikely.';
  const compact=t=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(t);
  return `**Your waitlist outlook**\n\n**${headline}** (about **${r.chancePercent}%**)\n\n**When might you hear?**\n${r.window?`${compact(r.window.from)} – ${compact(r.window.to)} ET\nIf you are confirmed by your deadline, this is the estimated window.`:'There is not enough evidence to suggest a useful time window.'}\n\n**Why${explanation.source==='openai'?'':' · statistical summary (AI unavailable)'}**\n${explanation.text}\n\nYour deadline: ${compact(r.deadline)} ET${r.queuePosition?` · Waitlist position: ${r.queuePosition}`:''}\n*Simulated data · Not a guaranteed booking. See About this estimate for assumptions.*`;
 
