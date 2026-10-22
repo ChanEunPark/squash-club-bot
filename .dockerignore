@@ -6,3 +6,9 @@
 !schedule.mjs
 
 !testing.mjs
+
+!billing.mjs
+!forecast.mjs
+!outlook-ai.mjs
+!fixtures/
+!fixtures/**
