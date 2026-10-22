@@ -17,3 +17,5 @@ test('negative guarantee disclaimer is allowed and a temporary failure is retrie
  const a=await explainOutlook(r,{apiKey:'fake',model:'retry-test',fetchImpl,now});assert.equal(a.source,'statistical');assert.equal(a.reason,'http-503');
  const b=await explainOutlook(r,{apiKey:'fake',model:'retry-test',fetchImpl,now});assert.equal(b.source,'openai');assert.equal(calls,2);
 });
+
+test('low probability is sent to AI as less likely, with actual people ahead and no conditional-window rationale',()=>{const input=explanationInput({chancePercent:45,rangePercent:[35,55],deadline:now+86400000,phase:'before-cutoff',queuePosition:3,waiters:3,window:{from:now+100,to:now+10000},factors:[],uncertainty:'demo'},now);assert.equal(input.outlookBand,'less-likely');assert.equal(input.peopleAhead,2);assert.match(input.interpretation,/Failure.*more likely/);assert.equal(input.conditionalWindowHours,undefined);});
