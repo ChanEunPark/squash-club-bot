@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {predictOutlook,parseDeadline,history,cutoffOutlookRecipients} from './forecast.mjs';import {explainOutlook,explanationInput} from './outlook-ai.mjs';
+import {predictOutlook,parseDeadline,history,clubInsights,cutoffOutlookRecipients} from './forecast.mjs';import {explainOutlook,explanationInput} from './outlook-ai.mjs';
 const H=3600000,now=Date.parse('2026-10-22T12:00:00Z'),start=now+6*24*H;
 function session(scenario='mixed'){return {id:'test',startsAt:start,cutoffAt:start-53*H,capacity:8,members:Array.from({length:8},(_,i)=>({id:`member-${i}`})),waitlist:[{id:'private-user-id',name:'Private name'},{id:'second'}],openings:[],forecastScenario:scenario};}
 test('mock dataset includes participation, cancellations, and response timing with no real people',()=>{assert.equal(history.synthetic,true);assert.equal(history.sessions.length,48);assert.ok(history.records.some(r=>r.canceledAt!==null));assert.ok(history.records.some(r=>r.attended));assert.ok(history.responses.length>0);});
@@ -22,3 +22,27 @@ test('low probability is sent to AI as less likely, with actual people ahead and
 
 test('cutoff outlook is queued once for real waiters and not before cutoff or after start',()=>{const s=session();assert.deepEqual(cutoffOutlookRecipients(s,now),[]);s.waitlist.push({id:'fake-waiter'});const recipients=cutoffOutlookRecipients(s,s.cutoffAt);assert.deepEqual(recipients,['private-user-id','second']);assert.deepEqual(cutoffOutlookRecipients(s,s.cutoffAt+1),[]);const restored=JSON.parse(JSON.stringify(s));assert.deepEqual(cutoffOutlookRecipients(restored,s.cutoffAt+2),[]);assert.deepEqual(cutoffOutlookRecipients(session(),start),[]);});
 test('ordinary allocation terminology does not make a valid AI explanation unavailable',async()=>{const r={...predictOutlook(session(),'private-user-id',start-H,now),chancePercent:45,phase:'after-cutoff',queuePosition:null};let calls=0;const text='After cutoff, everyone can receive an offer, so another waiter may accept first. A spot could still open from the simulated booking patterns.';const answer=await explainOutlook(r,{apiKey:'fake',model:'allocation-terminology',now,fetchImpl:async()=>{calls++;return {ok:true,json:async()=>({output:[{content:[{type:'output_text',text:JSON.stringify({explanation:text})}]}]})};}});assert.equal(answer.source,'openai');assert.equal(calls,1);});
+
+test('club insights compare fictional lineup tendencies and preserve aggregate privacy',()=>{
+ const stable=clubInsights(session('stable'),start-H,now),flexible=clubInsights(session('flexible'),start-H,now);
+ assert.ok(stable.rosterCancellationPercent<flexible.rosterCancellationPercent);
+ assert.equal(stable.all.find(x=>x.id==='lineup-pattern').direction,'limits');
+ assert.equal(flexible.all.find(x=>x.id==='lineup-pattern').direction,'supports');
+ assert.ok(!JSON.stringify(stable).includes('member-0'));
+ assert.equal(stable.bookingCount,history.records.length);
+});
+test('historical timing explains a short deadline and response competition only after cutoff',()=>{
+ const s=session();const early=clubInsights(s,now+H,now),late=clubInsights(s,start-H,now);
+ assert.ok(early.deadlineOverlapPercent<=late.deadlineOverlapPercent);
+ assert.equal(early.selected[0].id,'deadline-overlap');
+ assert.ok(!early.all.some(x=>x.id==='response-pattern'));
+ s.cutoffAt=now-1;const after=clubInsights(s,start-H,now);
+ assert.ok(after.all.some(x=>x.id==='response-pattern'));
+ assert.ok(after.medianAcceptMinutes>0);
+});
+test('AI input includes calculated historical patterns and fallback explains them',async()=>{
+ const result=predictOutlook(session('stable'),'private-user-id',start-H,now);
+ assert.deepEqual(explanationInput(result,now).clubInsights,result.insights);
+ const fallback=await explainOutlook(result,{apiKey:''});
+ assert.match(fallback.text,/lower cancellation tendency/);
+});
