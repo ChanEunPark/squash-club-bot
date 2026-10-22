@@ -1,6 +1,6 @@
 export const DAY = 24 * 60 * 60 * 1000;
 export function newSession(config = {}) {
-  return { id: crypto.randomUUID(), capacity: 8, fee: '15,000 KRW (sample)', title: 'Squash session', location: 'Sample court', cutoffAt: null, startsAt: null, members: [], waitlist: [], openings: [], ...config };
+  return { id: crypto.randomUUID(), capacity: 8, fee: 'Final amount pending (USD)', title: 'Squash session', location: 'Sample court', cutoffAt: null, startsAt: null, members: [], waitlist: [], openings: [], ...config };
 }
 export function validateTimes(cutoff, start, now = Date.now()) {
   const explicit = value => typeof value === 'string' && /(Z|[+-]\d\d:\d\d)$/.test(value);
