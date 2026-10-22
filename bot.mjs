@@ -1,4 +1,4 @@
-import {predictOutlook,parseDeadline} from './forecast.mjs';
+import {predictOutlook,parseDeadline,cutoffOutlookRecipients} from './forecast.mjs';
 import {explainOutlook} from './outlook-ai.mjs';
 import {finalizeBilling} from './billing.mjs';
 import fs from 'node:fs';
@@ -40,16 +40,16 @@ const shortDate=s=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'
 function panel(){const sessions=upcoming();return msg(`🏸 **Wednesday Squash**\nEvery Wednesday · **8–10 PM America/New_York**\nRegistration cutoff: **Monday 3 PM ET**\n\n${sessions.map(s=>`${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waiting: **${s.waitlist.length}**`).join('\n\n')}\n\nChoose an action below, then select a session in your DMs. Session options are recalculated when you click.\n**Demo environment — no real booking or payment.**`,[row(btn('signup','Sign up',3),btn('cancel','Cancel registration',2),btn('status','My status',2))]);}
 function deadlinePrompt(s){return `**When do you need confirmation by?**\nChoose a deadline so we can show your waitlist outlook. Optional: your place in the waitlist stays the same if you skip.\nYour deadline guides the estimate; it does not stop offers or remove you from the waitlist.\n*Based on simulated history. AI explains anonymous forecast results.*`;}
 function deadlineButtons(s){return row(btn(liveId('forecast-time',s),'Set my deadline',1),btn(liveId('forecast-any',s),'Any time before the session',2),btn(liveId('forecast-skip',s),'Skip for now',2));}
-async function outlookText(s,id){
+async function outlookText(s,id,{useSessionStart=false}={}){
  if(!s.waitlist.some(p=>p.id===id))return '';
- const pref=s.outlookPreferences?.[id];
+ const saved=s.outlookPreferences?.[id];const pref=saved?.deadline?saved:useSessionStart?{deadline:s.startsAt}:null;
  if(!pref?.deadline)return '**Your waitlist outlook**\nSet an optional confirmation deadline to see an estimate based on simulated history. Your waitlist registration is unchanged.';
  const r=predictOutlook(s,id,pref.deadline);
  if(!r.available)return '**Your waitlist outlook**\nYour planning deadline has passed. You are still on the waitlist and may still receive offers. Update your deadline for a new outlook.';
  const explanation=await explainOutlook(r);
- const headline=r.chancePercent>=60?'You have a good chance of getting a spot before your deadline.':r.chancePercent>=50?'Your chances are uncertain. Keep a backup plan.':r.chancePercent>=30?'A spot is possible, but you’re more likely to remain waitlisted by your deadline.':'Getting a spot before your deadline looks unlikely.';
+ const headline=r.chancePercent>=60?'You have a good chance of getting a spot before your deadline.':r.chancePercent>=50?'Your chances are uncertain. Keep a backup plan.':r.chancePercent>=30?'A spot could still come your way, though confirmation by your deadline is less likely.':'Getting a spot before your deadline looks unlikely.';
  const compact=t=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}).format(t);
- return `**Your waitlist outlook**\n\n**${headline}** (about **${r.chancePercent}%**)\n\n**When might you hear?**\n${r.window?`${compact(r.window.from)} – ${compact(r.window.to)} ET\nIf you are confirmed by your deadline, this is the estimated window.`:'There is not enough evidence to suggest a useful time window.'}\n\n**Why${explanation.source==='openai'?'':' · statistical summary (AI unavailable)'}**\n${explanation.text}\n\nYour deadline: ${compact(r.deadline)} ET${r.queuePosition?` · Waitlist position: ${r.queuePosition}`:''}\n*Simulated data · Not a guaranteed booking. See About this estimate for assumptions.*`;
+ return `**Your waitlist outlook**\n\n**${headline}** (about **${r.chancePercent}%**)\n\n**When might you hear?**\n${r.window?`${compact(r.window.from)} – ${compact(r.window.to)} ET\nIf you are confirmed by your deadline, this is the estimated window.`:'There is not enough evidence to suggest a useful time window.'}\n\n**Why${explanation.source==='openai'?'':' · statistical summary (AI unavailable)'}**\n${explanation.text}\n\n${r.phase==='after-cutoff'?'**A spot can still open.** You can keep your waitlist place—watch your DMs and respond promptly if an offer arrives. The first valid acceptance gets the spot.':'**There is still a chance.** You can stay on the waitlist. Before cutoff, promotion is automatic in registration order; after cutoff, watch your DMs for offers.'}\n\n${saved?.deadline?'Your deadline':'Outlook through session start (no personal deadline set)'}: ${compact(r.deadline)} ET${r.queuePosition?` · Waitlist position: ${r.queuePosition}`:''}\n*Simulated data · Not a guaranteed booking. See About this estimate for assumptions.*`;
 
 }
 function modalValue(components,id){for(const c of components||[]){if(c.custom_id===id)return c.value;const nested=modalValue(c.component?[c.component]:c.components,id);if(nested!==undefined)return nested;}}
@@ -72,6 +72,7 @@ function sweep(now=Date.now()){
     promotedAny=true;
    }
   }
+  for(const s of Object.values(state.sessions))for(const recipient of cutoffOutlookRecipients(s,now))job({type:'cutoff-outlook',sessionId:s.id,recipient});
   save();if(promotedAny)void refresh().catch(()=>console.log('Panel refresh deferred.'));
 }
 let draining=false;
@@ -86,6 +87,13 @@ async function drain(){if(draining)return;draining=true;try{
         const ref=await dm(j.recipient,offer(o,session));o.messages??=[];o.messages.push(ref);
         // A claim may arrive while the send request is in flight.
         if(o.status!=='open'||o.expiresAt<=Date.now())job({type:'edit',ref,data:closedOffer(o)});
+      }else if(j.type==='cutoff-outlook'){
+        const session=state.sessions[j.sessionId];
+        if(!session||session.testRetired||session.startsAt<=Date.now()||!session.waitlist.some(p=>p.id===j.recipient)){state.jobs=state.jobs.filter(x=>x.key!==j.key);save();continue;}
+        const text=await outlookText(session,j.recipient,{useSessionStart:true});
+        if(state.sessions[j.sessionId]!==session||!state.jobs.some(x=>x.key===j.key)||!session.waitlist.some(p=>p.id===j.recipient))continue;
+        const data=msg(`**Registration has closed — your waitlist update**\n${details(session)}\n\nYou are still on the waitlist. No need to keep checking My status.`,[row(btn(liveId('status',session),'View my status',2),btn(liveId('forecast-time',session),'Set / change deadline',2),btn(liveId('forecast-info',session),'About this estimate',2))]);
+        data.embeds=[{description:text,color:0x5865f2}];await dm(j.recipient,data);
       }else if(j.type==='edit')await api(`/channels/${j.ref.channel}/messages/${j.ref.id}`,'PATCH',j.data);
       else await dm(j.recipient,j.data);
       state.jobs=state.jobs.filter(x=>x.key!==j.key);
@@ -96,7 +104,7 @@ async function drain(){if(draining)return;draining=true;try{
 function closeSessionSearches(s){
  if(!s)return;
  for(const o of s.openings)if(o.status==='open'){o.status='expired';queueClose(o);}
- state.jobs=state.jobs.filter(j=>!['offer','dm'].includes(j.type)||j.sessionId!==s.id);
+ state.jobs=state.jobs.filter(j=>!['offer','dm','cutoff-outlook'].includes(j.type)||j.sessionId!==s.id);
 }
 const commands=[
  {name:'test',description:'Organizer-only shared session presets, roles and time controls',default_member_permissions:'32'},
