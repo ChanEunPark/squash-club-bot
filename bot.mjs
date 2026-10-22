@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import {makeTestSession,simulateCancellation,simulateClaim,isFictional} from './testing.mjs';
+import {makeTestSession,makeSharedTestSession,simulateCancellation,simulateClaim,isFictional} from './testing.mjs';
 import {ensureUpcoming,TIME_ZONE} from './schedule.mjs';
 import {newSession,join,cancel,accept,expire,status,validateTimes,DAY} from './core.mjs';
 const env=process.env;
@@ -21,6 +21,8 @@ if(state.session){const legacy={...newSession(),...state.session};state.sessions
 state.schema=4;state.jobs??=[];state.testSessions??={};state.testDrafts??={};
 for(const old of state.outbox||[])state.jobs.push({key:crypto.randomUUID(),type:'dm',recipient:old.recipient,data:old.data,attempts:old.attempts||0,nextAt:0});state.outbox=[];
 for(const session of Object.values(state.sessions))for(const o of session.openings){o.status??=o.winner?'filled':'expired';o.expiresAt??=0;}
+for(const old of Object.values(state.sessions))if(old.testOwner&&!old.testShared){old.testRetired=true;state.jobs=state.jobs.filter(j=>j.sessionId!==old.id);}
+state.testSessions={};
 function upcoming(){const result=ensureUpcoming(state.sessions);save();return result;}
 function save(){fs.writeFileSync(file+'.tmp',JSON.stringify(state,null,2),{mode:0o600});fs.renameSync(file+'.tmp',file);}
 function job(entry){if(isFictional(entry.recipient))return;state.jobs.push({key:crypto.randomUUID(),attempts:0,nextAt:0,...entry});}
@@ -65,8 +67,13 @@ async function drain(){if(draining)return;draining=true;try{
     save();
   }
 }finally{draining=false;}}
+function closeSessionSearches(s){
+ if(!s)return;
+ for(const o of s.openings)if(o.status==='open'){o.status='expired';queueClose(o);}
+ state.jobs=state.jobs.filter(j=>!['offer','dm'].includes(j.type)||j.sessionId!==s.id);
+}
 const commands=[
- {name:'test',description:'Organizer-only isolated test presets, roles and time controls',default_member_permissions:'32'},
+ {name:'test',description:'Organizer-only shared session presets, roles and time controls',default_member_permissions:'32'},
  {name:'setup',description:'Publish or refresh the session and demo panels',default_member_permissions:'32'},
  {name:'configure',description:'Set session dates and details; never resets existing registrations',default_member_permissions:'32',options:[
   {type:3,name:'session',description:'Session date YYYY-MM-DD, e.g. 2026-10-28',required:true},
@@ -110,29 +117,28 @@ function demoAction(id,action,key){const d=state.demos[id];if(!d||d.key!==key)th
  accept(d.s,o.id,action==='accept'?id:'sam',102);d.stage='done';save();
  return msg(action==='accept'?'**충원 완료 · You’re confirmed**\nYour booking replaces Alex’s.\n\n**Your DM — preview:** Contact Alex’s Discord profile and send the stated fee directly.\n**Alex’s DM — preview:** You replaced Alex; Alex receives your Discord contact and the amount to receive.\n\nNo actual payment or messages to fictional players.':'**충원 완료 · Sam accepted first**\nYou stay on the waitlist. The old offer is closed. Alex and Sam receive separate settlement DMs in real use.',[row(btn(`closed:${key}`,'충원 완료',2,true),btn('demo-start','Try again',2))]);
 }
-function sessionsFor(id){const all=upcoming(),t=state.sessions[state.testSessions[id]];return t&&!t.testRetired?all.map(s=>s.id===t.sourceId?t:s):all;}
-function controlPanel(){return msg('**Test controls**\nRun /test to configure a scenario. Reset clears all bookings, waitlists, replacement searches, and private demo/test states across all sessions. It does not delete channel messages.',[row(btn('test','Open test setup',3),btn('reset-all','Reset all data',4))]);}
-function testControls(t){return msg(`**Organizer test controls**\nIsolated test · no real booking or payment.\n${details(t)}\nConfirmed: **${t.members.length}/8** · Waiting: **${t.waitlist.length}**\nYour status: **${status(t,t.testOwner)}**\n\nUse the normal channel buttons to test your own actions. Your selected date now opens this private test copy. Fictional players never receive real DMs.`,[
+function sessionsFor(id){return upcoming();}
+function controlPanel(){return msg('**Test controls**\nRun /test to configure a scenario. Reset clears all bookings, waitlists, replacement searches, and demo/test states across all sessions. It does not delete channel messages.',[row(btn('test','Open test setup',3),btn('reset-all','Reset all data',4))]);}
+function testControls(t){return msg(`**Organizer test controls**\nShared demo session · no real booking or payment.\n${details(t)}\nConfirmed: **${t.members.length}/8** · Waiting: **${t.waitlist.length}**\nYour status: **${status(t,t.organizerId)}**\n\nAll accounts use this same session through #squash-session and their DMs. Fictional players never receive real DMs.`,[
  row(btn('test:vacancy','Simulate player cancellation'),btn('test:claim','Simulate waiter accepting',2)),
- row(btn('test:expire','Fast-forward deadline',2),btn('test:reset','Reset my test',4)),
+ row(btn('test:expire','Fast-forward deadline',2),btn('test:reset','Reset this session',4)),
  row(btn('test:new','Change preset',2),btn('reset-all','Reset all data',4))]);}
-function retireTest(id){const t=state.sessions[state.testSessions[id]];if(t){t.testRetired=true;for(const o of t.openings)if(o.status==='open'){o.status='expired';queueClose(o);}state.jobs=state.jobs.filter(j=>j.type!=='offer'||j.sessionId!==t.id);}delete state.testSessions[id];save();}
 async function testUI(i,p,action,reply){
- manager(i);
- if(action==='test'&&state.sessions[state.testSessions[p.id]]&&!state.sessions[state.testSessions[p.id]].testRetired){await reply(testControls(state.sessions[state.testSessions[p.id]]));return;}
- if(action==='test'||action==='test:new'){const key=crypto.randomUUID();state.testDrafts[p.id]={key,step:'date'};save();await reply(msg('**Organizer test setup**\nChoose which Wednesday to copy. Existing registrations are untouched.',upcoming().map(s=>row(btn(`test:date:${s.id}`,shortDate(s),3)))));return;}
+ manager(i);if(i.channel_id!==env.DISCORD_DEMO_CHANNEL_ID)throw Error('Open /test in #test-controls.');
+ if(action==='test'&&state.sessions[state.sharedTestId]&&!state.sessions[state.sharedTestId].testRetired){await reply(testControls(state.sessions[state.sharedTestId]));return;}
+ if(action==='test'||action==='test:new'){const key=crypto.randomUUID();state.testDrafts[p.id]={key,step:'date'};save();await reply(msg('**Organizer test setup**\nChoose the shared Wednesday session to configure. Applying a preset replaces that date’s registrations for all accounts.',upcoming().map(s=>row(btn(`test:date:${s.id}`,shortDate(s),3)))));return;}
  const [,step,value]=action.split(':');let draft=state.testDrafts[p.id];
  if(step==='date'){const src=upcoming().find(s=>s.id===value);if(!src)throw Error('Choose an available Wednesday.');draft={key:crypto.randomUUID(),sourceId:value,step:'preset'};state.testDrafts[p.id]=draft;save();await reply(msg('**Choose fictional headcount**',[row(btn('test:preset:empty','Empty · 0 + 0'),btn('test:preset:almost','One spot left · 7 + 0')) ,row(btn('test:preset:full','Full · 8 + 0'),btn('test:preset:replacement','Replacement · 8 + 2'))]));return;}
  if(step==='preset'){if(!draft||draft.step!=='preset')throw Error('Start /test again.');draft.preset=value;draft.step='role';save();await reply(msg('**Your role**\nCounts include you. If a preset has no slot for your role, one is added.',[row(btn('test:role:participant','Confirmed player'),btn('test:role:waiter','Waitlisted player'),btn('test:role:none','Not registered'))]));return;}
  if(step==='role'){if(!draft||draft.step!=='role')throw Error('Start /test again.');draft.role=value;draft.step='phase';save();await reply(msg('**Registration phase**',[row(btn('test:phase:before','Before cutoff'),btn('test:phase:after','After cutoff'))]));return;}
- if(step==='phase'){if(!draft||draft.step!=='phase')throw Error('Start /test again.');draft.phase=value;draft.step='apply';const preview=makeTestSession(state.sessions[draft.sourceId],draft,p);save();await reply(msg(`**Apply this test?**\n${shortDate(state.sessions[draft.sourceId])} · ${value==='before'?'Before':'After'} cutoff\nConfirmed: **${preview.members.length}** · Waiting: **${preview.waitlist.length}**\nYour role: **${draft.role}**\n\nCreates an isolated copy. Any previous private test is archived. Real registrations remain unchanged.`,[row(btn(`test:apply:${draft.key}`,'Apply test',3))]));return;}
- if(step==='apply'){if(!draft||draft.step!=='apply'||draft.key!==value)throw Error('This setup is outdated. Start /test again.');const t=makeTestSession(state.sessions[draft.sourceId],draft,p);retireTest(p.id);state.sessions[t.id]=t;state.testSessions[p.id]=t.id;delete state.testDrafts[p.id];save();await reply(testControls(t));return;}
- const t=state.sessions[state.testSessions[p.id]];if(!t||t.testRetired||t.testOwner!==p.id)throw Error('Create a test with /test first.');
- if(step==='reset'){await reply(msg('**Reset your isolated test?**\nYour test will be archived and normal Wednesday sessions will appear again. Real registrations are untouched.',[row(btn(`test:reset-confirm:${t.id}`,'Confirm reset',4))]));return;}
- if(step==='reset-confirm'){if(value!==t.id)throw Error('This reset is outdated.');retireTest(p.id);await reply(msg('Test archived. Normal Wednesday sessions are restored.',[row(btn('test','Create another test',3))]));return;}
- if(step==='vacancy'){const r=simulateCancellation(t);if(r.opening)for(const recipient of r.opening.eligible)job({type:'offer',recipient,openingId:r.opening.id,sessionId:t.id});save();await reply(testControls(t));void drain();return;}
- if(step==='claim'){const {opening:o,handoff:h}=simulateClaim(t);queueClose(o);if(!isFictional(h.canceled.id))job({type:'dm',recipient:h.canceled.id,data:msg(`**충원 완료 · Test replacement accepted**\n${details(t)}\n${h.replacement.name} is fictional. In a real handoff, you would receive **${h.fee}** directly. No payment is needed.`)});save();await reply(testControls(t));void drain();return;}
- if(step==='expire'){for(const o of t.openings)if(o.status==='open')o.expiresAt=Date.now();sweep();await reply(testControls(t));void drain();return;}
+ if(step==='phase'){if(!draft||draft.step!=='phase')throw Error('Start /test again.');draft.phase=value;draft.step='apply';const preview=makeTestSession(state.sessions[draft.sourceId],draft,p);save();await reply(msg(`**Apply this test?**\n${shortDate(state.sessions[draft.sourceId])} · ${value==='before'?'Before':'After'} cutoff\nConfirmed: **${preview.members.length}** · Waiting: **${preview.waitlist.length}**\nYour role: **${draft.role}**\n\nReplaces this date’s bookings, waitlist, and replacement searches for all accounts. Other dates are unchanged.`,[row(btn(`test:apply:${draft.key}`,'Apply test',3))]));return;}
+ if(step==='apply'){if(!draft||draft.step!=='apply'||draft.key!==value)throw Error('This setup is outdated. Start /test again.');const source=state.sessions[draft.sourceId];const t=makeSharedTestSession(source,draft,p);closeSessionSearches(source);state.sessions[t.id]=t;state.sharedTestId=t.id;delete state.testDrafts[p.id];save();await refresh();await reply(testControls(t));void drain();return;}
+ const t=state.sessions[state.sharedTestId];if(!t||t.testRetired||!t.testShared)throw Error('Create a test with /test first.');
+ if(step==='reset'){await reply(msg('**Reset this shared session?**\nThis clears this date’s registrations for all accounts and restores its normal Wednesday schedule. Other dates are unchanged.',[row(btn(`test:reset-confirm:${t.id}`,'Confirm reset',4))]));return;}
+ if(step==='reset-confirm'){if(value!==t.id)throw Error('This reset is outdated.');closeSessionSearches(t);delete state.sessions[t.id];delete state.sharedTestId;upcoming();state.sessions[t.id].changedAt=Date.now();save();await refresh();await reply(msg('Shared session reset. Its normal Wednesday schedule is restored.',[row(btn('test','Create another test',3))]));return;}
+ if(step==='vacancy'){const r=simulateCancellation(t);if(r.opening)for(const recipient of r.opening.eligible)job({type:'offer',recipient,openingId:r.opening.id,sessionId:t.id});save();await refresh();await reply(testControls(t));void drain();return;}
+ if(step==='claim'){const {opening:o,handoff:h}=simulateClaim(t);queueClose(o);if(!isFictional(h.canceled.id))job({type:'dm',recipient:h.canceled.id,data:msg(`**충원 완료 · Test replacement accepted**\n${details(t)}\n${h.replacement.name} is fictional. In a real handoff, you would receive **${h.fee}** directly. No payment is needed.`)});save();await refresh();await reply(testControls(t));void drain();return;}
+ if(step==='expire'){for(const o of t.openings)if(o.status==='open')o.expiresAt=Date.now();sweep();await refresh();await reply(testControls(t));void drain();return;}
  throw Error('Unknown test action.');
 }
 async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCORD_GUILD_ID)return;
@@ -150,7 +156,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    if(action==='reset-all'){await reply(msg('**Reset all demo data?**\nThis clears every session’s bookings, waitlists, replacement searches, and test setups for all users. Existing messages remain, but old action buttons become inactive.',[row(btn('reset-all-confirm','Yes, reset all data',4),btn('reset-all-back','Keep data',2))]));return;}
    state.resetAt=Date.now();const closing=[];
    for(const session of Object.values(state.sessions))for(const o of session.openings){if(o.status==='open'){o.status='expired';for(const ref of o.messages||[])closing.push({type:'edit',ref,data:closedOffer(o)});}}
-   state.sessions={};state.testSessions={};state.testDrafts={};state.demos={};state.jobs=[];for(const entry of closing)job(entry);upcoming();save();await refresh();await reply(msg('**All demo data reset.**\nBoth Wednesday sessions now have zero registrations.',[row(btn('test','Set up a test',3))]));void drain();return;
+   state.sessions={};delete state.sharedTestId;state.testSessions={};state.testDrafts={};state.demos={};state.jobs=[];for(const entry of closing)job(entry);upcoming();save();await refresh();await reply(msg('**All demo data reset.**\nBoth Wednesday sessions now have zero registrations.',[row(btn('test','Set up a test',3))]));void drain();return;
   }
   if(action==='reset-all-back'){manager(i);await reply(msg('Reset canceled. All data kept.'));return;}
   if(state.resetAt&&i.message?.timestamp&&Date.parse(i.message.timestamp)<state.resetAt&&action.includes(':')&&!action.startsWith('test:'))throw Error('This message predates the data reset. Start again from the session channel.');
@@ -172,7 +178,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    const sessions=[...next,...extra].slice(0,5);
    const actions=sessions.map(s=>{const waiting=s.waitlist.some(u=>u.id===p.id),booked=s.members.some(u=>u.id===p.id);return row(btn(liveId(waiting?'status':booked?'cancel':'signup',s),`${shortDate(s)} · ${waiting?'View status':booked?'Cancel booking':'Book'}`,waiting?2:booked?4:3));});
    const data=msg('**My status**\nOnly you can see this. All times: America/New_York.',actions);
-   data.embeds=sessions.map(s=>({title:shortDate(s),description:`${details(s)}\n\nYour status: **${status(s,p.id)}**`,color:s.waitlist.some(u=>u.id===p.id)?0xe9b949:s.members.some(u=>u.id===p.id)?0x33a474:0x8792a2}));
+   data.embeds=sessions.map(s=>({title:shortDate(s),description:`${details(s)}\n\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\nYour status: **${status(s,p.id)}**`,color:s.waitlist.some(u=>u.id===p.id)?0xe9b949:s.members.some(u=>u.id===p.id)?0x33a474:0x8792a2}));
    await reply(data);return;
   }
   if(['signup','join','cancel'].includes(action)){
@@ -184,6 +190,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   }
   const [a,sid,oid]=action.split(':');const s=state.sessions[sid];
   if(!s||s.testRetired||s.testOwner&&s.testOwner!==p.id)throw Error('This session is no longer available. Use the latest session buttons.');
+  if(s.changedAt&&i.message?.timestamp&&Date.parse(i.message.timestamp)<s.changedAt)throw Error('This session was reconfigured. Start again from #squash-session.');
   const send=async data=>{await dm(p.id,data);await reply(msg('📩 Check your DMs from Squash Club Bot.'));};
   if(a==='signup'||a==='join'){
    if(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))throw Error('You are already registered. Use My status.');
@@ -216,7 +223,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(a==='status'){
    const handoffs=s.openings.filter(o=>o.status==='filled'&&(o.winner.id===p.id||o.canceled.id===p.id)).map(o=>{const receiving=o.canceled.id===p.id,other=receiving?o.winner:o.canceled;return `${receiving?'Receive':'Send'} ${s.fee} · ${other.name}\n${isFictional(other.id)?'Fictional player — no payment needed':`https://discord.com/users/${other.id}`}`;});
    const offers=s.openings.filter(o=>o.status==='open'&&o.eligible.includes(p.id)&&s.waitlist.some(w=>w.id===p.id));
-   await reply(msg(`**My status: ${status(s,p.id)}**\n${details(s)}\n\n${handoffs.join('\n')}\nDemo only — no payment.`,offers.slice(0,5).map(o=>row(btn(`accept:${s.id}:${o.id}`,'Accept available spot',3)))));return;
+   await reply(msg(`**My status: ${status(s,p.id)}**\n${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\n\n${handoffs.join('\n')}\nDemo only — no payment.`,offers.slice(0,5).map(o=>row(btn(`accept:${s.id}:${o.id}`,'Accept available spot',3)))));return;
   }
   throw Error('This button is outdated. Use the current session panel or /demo.');
  }catch(e){await reply(msg(e.message)).catch(()=>{});console.log('Action could not complete; no credentials logged.');}
