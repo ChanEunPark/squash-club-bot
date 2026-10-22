@@ -1,3 +1,5 @@
+import {predictOutlook,parseDeadline} from './forecast.mjs';
+import {explainOutlook} from './outlook-ai.mjs';
 import {finalizeBilling} from './billing.mjs';
 import fs from 'node:fs';
 import {makeTestSession,makeSharedTestSession,reminderRecipients,closeTestRegistration,simulateCancellation,simulateClaim,isFictional} from './testing.mjs';
@@ -36,6 +38,18 @@ function details(s){return `**${s.title}**\nSession: ${when(s.startsAt)}\nRegist
 const liveId=(action,s)=>`${action}:${s.id}`;
 const shortDate=s=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'short',month:'short',day:'numeric'}).format(s.startsAt);
 function panel(){const sessions=upcoming();return msg(`🏸 **Wednesday Squash**\nEvery Wednesday · **8–10 PM America/New_York**\nRegistration cutoff: **Monday 3 PM ET**\n\n${sessions.map(s=>`${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waiting: **${s.waitlist.length}**`).join('\n\n')}\n\nChoose an action below, then select a session in your DMs. Session options are recalculated when you click.\n**Demo environment — no real booking or payment.**`,[row(btn('signup','Sign up',3),btn('cancel','Cancel registration',2),btn('status','My status',2))]);}
+function deadlinePrompt(s){return `**When do you need confirmation by?**\nChoose a deadline so we can show your waitlist outlook. Optional: your place in the waitlist stays the same if you skip.\nYour deadline guides the estimate; it does not stop offers or remove you from the waitlist.\n*Based on simulated history. AI explains anonymous forecast results.*`;}
+function deadlineButtons(s){return row(btn(liveId('forecast-time',s),'Set my deadline',1),btn(liveId('forecast-any',s),'Any time before the session',2),btn(liveId('forecast-skip',s),'Skip for now',2));}
+async function outlookText(s,id){
+ if(!s.waitlist.some(p=>p.id===id))return '';
+ const pref=s.outlookPreferences?.[id];
+ if(!pref?.deadline)return '**Your waitlist outlook**\nSet an optional confirmation deadline to see an estimate based on simulated history. Your waitlist registration is unchanged.';
+ const r=predictOutlook(s,id,pref.deadline);
+ if(!r.available)return '**Your waitlist outlook**\nYour planning deadline has passed. You are still on the waitlist and may still receive offers. Update your deadline for a new outlook.';
+ const explanation=await explainOutlook(r);
+ return `**Your waitlist outlook · Simulated data**\nConfirmation needed by: ${when(r.deadline)}\nEstimated chance of confirmation by then: **about ${r.chancePercent}%**\nScenario range: **${r.rangePercent[0]}–${r.rangePercent[1]}%** (assumption sensitivity, not a confidence interval)\n${r.queuePosition?`Current waitlist position: **${r.queuePosition}**`:'After cutoff: first valid acceptance wins, regardless of waitlist order.'}\n${r.window?`If confirmed by your deadline, simulated confirmation window: ${when(r.window.from)} – ${when(r.window.to)}`:'No reliable confirmation window in this simulation.'}\n\n${explanation.source==='openai'?'**AI planning note**':'**Statistical planning note · AI unavailable**'}\n${explanation.text}\n\n*Based on ${r.historicalSessions} fictional sessions and mock participant profiles, not real member history. This estimate is unvalidated and does not guarantee a booking.*`;
+}
+function modalValue(components,id){for(const c of components||[]){if(c.custom_id===id)return c.value;const nested=modalValue(c.component?[c.component]:c.components,id);if(nested!==undefined)return nested;}}
 async function dm(id,data){if(isFictional(id))return null;const c=await api('/users/@me/channels','POST',{recipient_id:id});const m=await api(`/channels/${c.id}/messages`,'POST',data);return {channel:c.id,id:m.id};}
 async function refresh(){if(state.panels.session)await api(`/channels/${env.DISCORD_SESSION_CHANNEL_ID}/messages/${state.panels.session}`,'PATCH',panel());}
 async function putPanel(key,channel,data){if(state.panels[key]){try{await api(`/channels/${channel}/messages/${state.panels[key]}`,'PATCH',data);return;}catch(e){if(e.httpStatus!==404)throw e;}}const m=await api(`/channels/${channel}/messages`,'POST',data);state.panels[key]=m.id;save();}
@@ -141,11 +155,12 @@ function testControls(t,notice=''){
 • **Change preset** — applying replaces this date’s data for all accounts.
 • **Reset all data** — clear all session/test data after confirmation. Messages stay.
 
-Use #squash-session and each account’s DMs for participant actions. Fictional players never receive DMs.`,[
+Mock outlook profiles: **${t.forecastScenario||'mixed'}**. Scenario buttons change fictional history assumptions only.\nUse #squash-session and each account’s DMs for participant actions. Fictional players never receive DMs.`,[
  row(btn('test:remind','Send cutoff reminder now',1,closed),btn('test:cutoff','Close registration now',4,closed)),
  row(btn('test:vacancy','Simulate player cancellation'),btn('test:claim','Simulate waiter accepting',2)),
  row(btn('test:expire','Expire replacement offers now',2,searches===0),btn('test:reset','Reset this session',4)),
- row(btn('test:new','Change preset',2),btn('reset-all','Reset all data',4))]);
+ row(btn('test:new','Change preset',2),btn('reset-all','Reset all data',4)),
+ row(btn('test:forecast:stable','Outlook: stable history',2),btn('test:forecast:mixed','Outlook: mixed history',2),btn('test:forecast:flexible','Outlook: more cancellations',2))]);
 }
 async function testUI(i,p,action,reply){
  manager(i);if(i.channel_id!==env.DISCORD_DEMO_CHANNEL_ID)throw Error('Open /test in #test-controls.');
@@ -158,6 +173,7 @@ async function testUI(i,p,action,reply){
  if(step==='phase'){if(!draft||draft.step!=='phase')throw Error('Start /test again.');draft.phase=value;draft.step='apply';const preview=makeTestSession(state.sessions[draft.sourceId],draft,p);save();await reply(msg(`**Apply this test?**\n${shortDate(state.sessions[draft.sourceId])} · ${value==='before'?'Before':'After'} cutoff\nConfirmed: **${preview.members.length}** · Waiting: **${preview.waitlist.length}**\nYour role: **${draft.role}**\n\nReplaces this date’s bookings, waitlist, and replacement searches for all accounts. Other dates are unchanged.`,[row(btn(`test:apply:${draft.key}`,'Apply test',3))]));return;}
  if(step==='apply'){if(!draft||draft.step!=='apply'||draft.key!==value)throw Error('This setup is outdated. Start /test again.');const source=state.sessions[draft.sourceId];const t=makeSharedTestSession(source,draft,p);closeSessionSearches(source);state.sessions[t.id]=t;state.sharedTestId=t.id;delete state.testDrafts[p.id];sweep();save();await refresh();await reply(testControls(t));void drain();return;}
  const t=state.sessions[state.sharedTestId];if(!t||t.testRetired||!t.testShared)throw Error('Create a test with /test first.');
+ if(step==='forecast'){if(!['stable','mixed','flexible'].includes(value))throw Error('Unknown outlook scenario.');t.forecastScenario=value;save();await reply(testControls(t,`Mock history scenario: ${value}. Bookings are unchanged. Refresh My status to compare outlooks.`));return;}
  if(step==='reset'){await reply(msg('**Reset this shared session?**\nThis clears this date’s registrations for all accounts and restores its normal Wednesday schedule. Other dates are unchanged.',[row(btn(`test:reset-confirm:${t.id}`,'Confirm reset',4))]));return;}
  if(step==='reset-confirm'){if(value!==t.id)throw Error('This reset is outdated.');closeSessionSearches(t);delete state.sessions[t.id];delete state.sharedTestId;upcoming();state.sessions[t.id].changedAt=Date.now();save();await refresh();await reply(msg('Shared session reset. Its normal Wednesday schedule is restored.',[row(btn('test','Create another test',3))]));return;}
  if(step==='vacancy'){const r=simulateCancellation(t);notifyPromotions(t,r.promoted);if(r.opening)for(const recipient of r.opening.eligible)job({type:'offer',recipient,openingId:r.opening.id,sessionId:t.id});save();await refresh();await reply(testControls(t));void drain();return;}
@@ -172,6 +188,14 @@ async function testUI(i,p,action,reply){
  throw Error('Unknown test action.');
 }
 async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCORD_GUILD_ID)return;
+ if(i.type===3&&i.data.custom_id?.startsWith('forecast-time:')){
+  const s=state.sessions[i.data.custom_id.split(':')[1]];
+  if(s&&!s.testRetired&&s.waitlist.some(u=>u.id===p.id)&&(!s.changedAt||Date.parse(i.message?.timestamp||0)>=s.changedAt)){
+   const example=new Intl.DateTimeFormat('en-CA',{timeZone:TIME_ZONE,year:'numeric',month:'2-digit',day:'2-digit'}).format(s.startsAt)+' 17:00';
+   await api(`/interactions/${i.id}/${i.token}/callback`,'POST',{type:9,data:{custom_id:`forecast-save:${s.id}:${s.changedAt||state.resetAt||0}`,title:'Your confirmation deadline',components:[{type:18,label:'Confirm by (Eastern Time)',description:'YYYY-MM-DD HH:mm, 24-hour time. Optional to answer; closing this form keeps you waitlisted.',component:{type:4,custom_id:'deadline',style:1,min_length:16,max_length:16,placeholder:example,required:true}}]}});return;
+  }
+ }
+
  try{await api(`/interactions/${i.id}/${i.token}/callback`,'POST',{type:5,data:{flags:64}});}catch{return;}
  const reply=data=>api(`/webhooks/${env.DISCORD_APPLICATION_ID}/${i.token}/messages/@original`,'PATCH',data);
  try{
@@ -208,7 +232,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    const sessions=[...next,...extra].slice(0,5);
    const actions=sessions.map(s=>{const waiting=s.waitlist.some(u=>u.id===p.id),booked=s.members.some(u=>u.id===p.id);return row(btn(liveId(waiting?'status':booked?'cancel':'signup',s),`${shortDate(s)} · ${waiting?'View status':booked?'Cancel booking':'Book'}`,waiting?2:booked?4:3));});
    const data=msg('**My status**\nOnly you can see this. All times: America/New_York.',actions);
-   data.embeds=sessions.map(s=>({title:shortDate(s),description:`${details(s)}\n\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\nYour status: **${status(s,p.id)}**`,color:s.waitlist.some(u=>u.id===p.id)?0xe9b949:s.members.some(u=>u.id===p.id)?0x33a474:0x8792a2}));
+   data.embeds=await Promise.all(sessions.map(async s=>({title:shortDate(s),description:`${details(s)}\n\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\nYour status: **${status(s,p.id)}**${s.waitlist.some(u=>u.id===p.id)?`\n\n${await outlookText(s,p.id)}`:''}`,color:s.waitlist.some(u=>u.id===p.id)?0xe9b949:s.members.some(u=>u.id===p.id)?0x33a474:0x8792a2})));
    await reply(data);return;
   }
   if(['signup','join','cancel'].includes(action)){
@@ -221,6 +245,18 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   const [a,sid,oid]=action.split(':');const s=state.sessions[sid];
   if(!s||s.testRetired||s.testOwner&&s.testOwner!==p.id)throw Error('This session is no longer available. Use the latest session buttons.');
   if(s.changedAt&&i.message?.timestamp&&Date.parse(i.message.timestamp)<s.changedAt)throw Error('This session was reconfigured. Start again from #squash-session.');
+  if(['forecast-save','forecast-any','forecast-skip','forecast-info'].includes(a)){
+   if(!s.waitlist.some(u=>u.id===p.id))throw Error('You are no longer waitlisted. Check My status.');
+   if(a==='forecast-save'&&oid!==String(s.changedAt||state.resetAt||0))throw Error('This session was reconfigured. Open My status and set your deadline again.');
+   s.outlookPreferences??={};
+   if(a==='forecast-save'){const deadline=parseDeadline(modalValue(i.data.components,'deadline')||'',s.startsAt);s.outlookPreferences[p.id]={deadline,updatedAt:Date.now()};save();}
+   if(a==='forecast-any'){if(s.startsAt<=Date.now())throw Error('This session has already started.');s.outlookPreferences[p.id]={deadline:s.startsAt,updatedAt:Date.now()};save();}
+   if(a==='forecast-skip'){await reply(msg('You are still on the waitlist. You can set or update your deadline from My status.',[row(btn(liveId('status',s),'View my status',2))]));return;}
+   if(a==='forecast-info'){await reply(msg('**How this demo estimate works**\nWe simulate possible cancellations from fictional participant histories, weighted toward recent records and adjusted toward the overall average when histories are sparse. Before cutoff, waitlist order applies. After cutoff, synthetic response times model first-acceptance competition.\nAll current accounts are assigned mock historical profiles for this demo; these are not their real attendance records. The scenario range changes cancellation assumptions by ±25%; it is not a confidence interval. The confirmation window is conditional on confirmation by your deadline.\nOpenAI receives only your relative time constraint and aggregate model results—not names, Discord IDs, payment details, or per-member histories. AI explains the forecast; it does not calculate probabilities.'));return;}
+   const text=await outlookText(s,p.id);
+   if(state.sessions[s.id]!==s||!s.waitlist.some(u=>u.id===p.id))throw Error('Your registration changed while the outlook was loading. Check My status again.');
+   const data=msg('Your deadline is saved. Your waitlist registration is unchanged.',[row(btn(liveId('forecast-time',s),'Change deadline',2),btn(liveId('forecast-info',s),'About this estimate',2))]);data.embeds=[{description:text,color:0x5865f2}];await reply(data);return;
+  }
   const send=async data=>{await dm(p.id,data);await reply(msg('📩 Check your DMs from Squash Club Bot.'));};
   if(a==='signup'||a==='join'){
    if(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))throw Error('You are already registered. Use My status.');
@@ -233,7 +269,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    await dm(p.id,msg('Processing your registration…'));
    const result=join(s,p,{waitlist:a==='wait'});save();
    if(result==='needs-waitlist-consent'){await send(msg('The session is full or cutoff has passed. Join the waitlist instead?\n\n'+policy,[row(btn(liveId('wait',s),'Agree & join waitlist',3),btn('dismiss-prompt','Not now',2))]));return;}
-   job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':Date.now()<s.cutoffAt?'✅ **Before cutoff, you will be automatically confirmed in waitlist registration order when a spot opens. After cutoff, offers arrive here and the first valid acceptance wins.**':'✅ **You will receive open-spot offers here. First valid acceptance wins.**'}\nDemo only — no payment.`)});
+   job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':Date.now()<s.cutoffAt?'✅ **Before cutoff, you will be automatically confirmed in waitlist registration order when a spot opens. After cutoff, offers arrive here and the first valid acceptance wins.**':'✅ **You will receive open-spot offers here. First valid acceptance wins.**'}\nDemo only — no payment.${result==='waitlisted'?`\n\n${deadlinePrompt(s)}`:''}`,result==='waitlisted'?[deadlineButtons(s)]:[])});
    if(result==='waitlisted')for(const o of s.openings)if(o.status==='open'&&o.eligible.includes(p.id))job({type:'offer',recipient:p.id,openingId:o.id,sessionId:s.id});
    save();await reply(msg('Registration saved. Check your DMs.'));await refresh();void drain();return;
   }
@@ -242,7 +278,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    await send(msg(`${details(s)}\n\n${waiting?'Leave the waitlist?':Date.now()<s.cutoffAt?'Before cutoff: your spot will be canceled immediately.':'After cutoff: request a replacement search. Your booking and fee responsibility remain until a replacement accepts. The search ends after 24 hours or at session start, whichever comes first.'}`,[row(btn(liveId('cancel-confirm',s),waiting?'Leave waitlist':Date.now()<s.cutoffAt?'Confirm cancellation':'Find a replacement',4),btn('dismiss-prompt',waiting?'Keep my waitlist spot':'Keep my booking',2))]));return;
   }
   if(a==='cancel-confirm'){
-   const r=cancel(s,p.id);notifyPromotions(s,r.promoted);if(r.opening)for(const id of r.opening.eligible)job({type:'offer',recipient:id,openingId:r.opening.id,sessionId:s.id});
+   const r=cancel(s,p.id);if(r.kind==='left-waitlist'&&s.outlookPreferences)delete s.outlookPreferences[p.id];notifyPromotions(s,r.promoted);if(r.opening)for(const id of r.opening.eligible)job({type:'offer',recipient:id,openingId:r.opening.id,sessionId:s.id});
    job({type:'dm',recipient:p.id,data:msg(r.kind==='searching'?`**Replacement search started**\n${details(s)}\nDeadline: ${when(r.opening.expiresAt)}\nYour booking and fee responsibility remain until someone accepts. We will DM the result, including if no replacement is found.`:r.kind==='canceled'?'**Cancellation complete**\nYour pre-cutoff booking has been removed.':'**You have left the waitlist.**')});save();await reply(msg('Request saved. Check your DMs.'));await refresh();void drain();return;
   }
   if(a==='accept'){
@@ -253,7 +289,10 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(a==='status'){
    const handoffs=s.openings.filter(o=>o.status==='filled'&&(o.winner.id===p.id||o.canceled.id===p.id)).map(o=>{const receiving=o.canceled.id===p.id,other=receiving?o.winner:o.canceled;return `${receiving?'Receive':'Send'} ${s.fee} · ${other.name}\n${isFictional(other.id)?'Fictional player — no payment needed':`https://discord.com/users/${other.id}`}`;});
    const offers=s.openings.filter(o=>o.status==='open'&&o.eligible.includes(p.id)&&s.waitlist.some(w=>w.id===p.id));
-   await reply(msg(`**My status: ${status(s,p.id)}**\n${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\n\n${handoffs.join('\n')}\nDemo only — no payment.`,offers.slice(0,5).map(o=>row(btn(`accept:${s.id}:${o.id}`,'Accept available spot',3)))));return;
+   const components=offers.slice(0,3).map(o=>row(btn(`accept:${s.id}:${o.id}`,'Accept available spot',3)));
+   const waiting=s.waitlist.some(u=>u.id===p.id);if(waiting)components.push(row(btn(liveId('forecast-time',s),s.outlookPreferences?.[p.id]?'Change deadline':'Set my deadline',2),btn(liveId('forecast-info',s),'About this estimate',2)));
+   const data=msg(`**My status: ${status(s,p.id)}**\n${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\n\n${handoffs.join('\n')}\nDemo only — no payment.`,components);
+   if(waiting)data.embeds=[{description:await outlookText(s,p.id),color:0x5865f2}];await reply(data);return;
   }
   throw Error('This button is outdated. Use the current session panel or /demo.');
  }catch(e){await reply(msg(e.message)).catch(()=>{});console.log('Action could not complete; no credentials logged.');}
