@@ -29,7 +29,7 @@ const row=(...components)=>({type:1,components});
 const msg=(content,components=[])=>({content,components,allowed_mentions:{parse:[]}});
 const when=t=>Number.isFinite(t)?`<t:${Math.floor(t/1000)}:F>`:'Not configured';
 const policy='Before the registration cutoff, cancellations release your spot immediately. After cutoff, we search for a replacement for up to 24 hours (or until the session starts). Your fee responsibility remains until someone accepts. All waitlisted players are notified; the first valid acceptance received by the bot wins. Discord contact is shared with your match only. Payments are settled directly, without collection or verification by this bot.';
-function details(s){return `**${s.title}**\nSession: ${when(s.startsAt)}\nRegistration cutoff: ${when(s.cutoffAt)}\nLocation: ${s.location}\nFee: **${s.fee}**`;}
+function details(s){return `**${s.title}**\nSession: ${when(s.startsAt)}\nRegistration cutoff: ${when(s.cutoffAt)}\nLocation: ${s.location}\n${Date.now()<s.cutoffAt?'Estimated fee: **$15–20 per person**':`Fee: **${s.fee}**`}`;}
 const liveId=(action,s)=>`${action}:${s.id}`;
 const shortDate=s=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'short',month:'short',day:'numeric'}).format(s.startsAt);
 function panel(){const sessions=upcoming();return msg(`🏸 **Wednesday Squash**\nEvery Wednesday · **8–10 PM America/New_York**\nRegistration cutoff: **Monday 3 PM ET**\n\n${sessions.map(s=>`${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waiting: **${s.waitlist.length}**`).join('\n\n')}\n\nChoose an action below, then select a session in your DMs. Session options are recalculated when you click.\n**Demo environment — no real booking or payment.**`,[row(btn('signup','Sign up',3),btn('cancel','Cancel registration',2),btn('status','My status',2))]);}
@@ -84,7 +84,7 @@ const app=await api('/oauth2/applications/@me');if(app.id!==env.DISCORD_APPLICAT
 for(const id of [env.DISCORD_SESSION_CHANNEL_ID,env.DISCORD_DEMO_CHANNEL_ID])if((await api(`/channels/${id}`)).guild_id!==env.DISCORD_GUILD_ID)throw Error('Channel/server mismatch.');
 if(process.argv.includes('--publish')){
   await putPanel('session',env.DISCORD_SESSION_CHANNEL_ID,panel());
-  await putPanel('demo',env.DISCORD_DEMO_CHANNEL_ID,msg('**Try the booking and replacement flow**\nPrivately test pre-cutoff cancellation, successful replacement, another waiter winning, and 24-hour expiry. No payment required.',[row(btn('demo-start','Start demo',3))]));
+  await putPanel('demo',env.DISCORD_DEMO_CHANNEL_ID,controlPanel());
   console.log('Session and demo panels updated.');process.exit(0);
 }
 function manager(i){const p=BigInt(i.member?.permissions||0);if(!(p&32n)&&!(p&8n))throw Error('Only a server manager can do this.');}
@@ -111,10 +111,11 @@ function demoAction(id,action,key){const d=state.demos[id];if(!d||d.key!==key)th
  return msg(action==='accept'?'**충원 완료 · You’re confirmed**\nYour booking replaces Alex’s.\n\n**Your DM — preview:** Contact Alex’s Discord profile and send the stated fee directly.\n**Alex’s DM — preview:** You replaced Alex; Alex receives your Discord contact and the amount to receive.\n\nNo actual payment or messages to fictional players.':'**충원 완료 · Sam accepted first**\nYou stay on the waitlist. The old offer is closed. Alex and Sam receive separate settlement DMs in real use.',[row(btn(`closed:${key}`,'충원 완료',2,true),btn('demo-start','Try again',2))]);
 }
 function sessionsFor(id){const all=upcoming(),t=state.sessions[state.testSessions[id]];return t&&!t.testRetired?all.map(s=>s.id===t.sourceId?t:s):all;}
+function controlPanel(){return msg('**Test controls**\nRun /test to configure a scenario. Reset clears all bookings, waitlists, replacement searches, and private demo/test states across all sessions. It does not delete channel messages.',[row(btn('test','Open test setup',3),btn('reset-all','Reset all data',4))]);}
 function testControls(t){return msg(`**Organizer test controls**\nIsolated test · no real booking or payment.\n${details(t)}\nConfirmed: **${t.members.length}/8** · Waiting: **${t.waitlist.length}**\nYour status: **${status(t,t.testOwner)}**\n\nUse the normal channel buttons to test your own actions. Your selected date now opens this private test copy. Fictional players never receive real DMs.`,[
  row(btn('test:vacancy','Simulate player cancellation'),btn('test:claim','Simulate waiter accepting',2)),
  row(btn('test:expire','Fast-forward deadline',2),btn('test:reset','Reset my test',4)),
- row(btn('test:new','Change preset',2))]);}
+ row(btn('test:new','Change preset',2),btn('reset-all','Reset all data',4))]);}
 function retireTest(id){const t=state.sessions[state.testSessions[id]];if(t){t.testRetired=true;for(const o of t.openings)if(o.status==='open'){o.status='expired';queueClose(o);}state.jobs=state.jobs.filter(j=>j.type!=='offer'||j.sessionId!==t.id);}delete state.testSessions[id];save();}
 async function testUI(i,p,action,reply){
  manager(i);
@@ -140,8 +141,21 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
  try{
   sweep();void drain();
   let action=i.type===2?i.data.name:i.data.custom_id;
+  if(action==='dismiss-prompt'){
+   if(i.message)await api(`/channels/${i.channel_id}/messages/${i.message.id}`,'PATCH',msg('**Request dismissed.** Your registration has not changed.'));
+   await reply(msg('No changes made.'));return;
+  }
+  if(action==='reset-all'||action==='reset-all-confirm'){
+   manager(i);if(i.channel_id!==env.DISCORD_DEMO_CHANNEL_ID)throw Error('Use Reset all data in #test-controls.');
+   if(action==='reset-all'){await reply(msg('**Reset all demo data?**\nThis clears every session’s bookings, waitlists, replacement searches, and test setups for all users. Existing messages remain, but old action buttons become inactive.',[row(btn('reset-all-confirm','Yes, reset all data',4),btn('reset-all-back','Keep data',2))]));return;}
+   state.resetAt=Date.now();const closing=[];
+   for(const session of Object.values(state.sessions))for(const o of session.openings){if(o.status==='open'){o.status='expired';for(const ref of o.messages||[])closing.push({type:'edit',ref,data:closedOffer(o)});}}
+   state.sessions={};state.testSessions={};state.testDrafts={};state.demos={};state.jobs=[];for(const entry of closing)job(entry);upcoming();save();await refresh();await reply(msg('**All demo data reset.**\nBoth Wednesday sessions now have zero registrations.',[row(btn('test','Set up a test',3))]));void drain();return;
+  }
+  if(action==='reset-all-back'){manager(i);await reply(msg('Reset canceled. All data kept.'));return;}
+  if(state.resetAt&&i.message?.timestamp&&Date.parse(i.message.timestamp)<state.resetAt&&action.includes(':')&&!action.startsWith('test:'))throw Error('This message predates the data reset. Start again from the session channel.');
   if(action==='test'||action.startsWith('test:')){await testUI(i,p,action,reply);return;}
-  if(action==='setup'){manager(i);await putPanel('session',env.DISCORD_SESSION_CHANNEL_ID,panel());await putPanel('demo',env.DISCORD_DEMO_CHANNEL_ID,msg('**Try the booking and replacement flow**\nPrivately test cancellation before cutoff, a successful replacement, and a 24-hour timeout. No other players or payment needed.',[row(btn('demo-start','Start demo',3))]));await reply(msg('Panels updated.'));return;}
+  if(action==='setup'){manager(i);await putPanel('session',env.DISCORD_SESSION_CHANNEL_ID,panel());await putPanel('demo',env.DISCORD_DEMO_CHANNEL_ID,controlPanel());await reply(msg('Panels updated.'));return;}
   if(action==='configure'){
    manager(i);const opts=Object.fromEntries(i.data.options.map(o=>[o.name,o.value]));const times=validateTimes(opts.cutoff,opts.start);
    const s=Object.values(state.sessions).find(s=>s.id===`wed-${opts.session}`);if(!s)throw Error('Select one of the currently available Wednesday dates.');if(s.openings.some(o=>o.status==='open'))throw Error('Finish active replacement searches before changing dates.');
@@ -174,21 +188,21 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(a==='signup'||a==='join'){
    if(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))throw Error('You are already registered. Use My status.');
    const full=s.members.length>=s.capacity||Date.now()>=s.cutoffAt;
-   await send(msg(`${details(s)}\n\n${full?'Registration is full or the cutoff has passed. Would you like to join the waitlist?':'Would you like to sign up?'}\n\n${policy}\n\nDemo only — no real payment.`,[row(btn(liveId(full?'wait':'register',s),full?'Agree & join waitlist':'Agree & sign up',3))]));return;
+   await send(msg(`${details(s)}\n\n${full?'Registration is full or the cutoff has passed. Would you like to join the waitlist?':'Would you like to sign up?'}\n\n${policy}\n\nDemo only — no real payment.`,[row(btn(liveId(full?'wait':'register',s),full?'Agree & join waitlist':'Agree & sign up',3),btn('dismiss-prompt','Not now',2))]));return;
   }
   if(a==='register'||a==='wait'){
    // Test DM delivery before changing the registration, and recheck capacity afterward.
    if(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))throw Error('You are already registered. Use My status.');
    await dm(p.id,msg('Processing your registration…'));
    const result=join(s,p,{waitlist:a==='wait'});save();
-   if(result==='needs-waitlist-consent'){await send(msg('The session is full or cutoff has passed. Join the waitlist instead?\n\n'+policy,[row(btn(liveId('wait',s),'Agree & join waitlist',3))]));return;}
+   if(result==='needs-waitlist-consent'){await send(msg('The session is full or cutoff has passed. Join the waitlist instead?\n\n'+policy,[row(btn(liveId('wait',s),'Agree & join waitlist',3),btn('dismiss-prompt','Not now',2))]));return;}
    job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':'✅ **You will receive open-spot offers here. First valid acceptance wins.**'}\nDemo only — no payment.`)});
    if(result==='waitlisted')for(const o of s.openings)if(o.status==='open'&&o.eligible.includes(p.id))job({type:'offer',recipient:p.id,openingId:o.id,sessionId:s.id});
    save();await reply(msg('Registration saved. Check your DMs.'));await refresh();void drain();return;
   }
   if(a==='cancel'){
    const waiting=s.waitlist.some(u=>u.id===p.id);if(!waiting&&!s.members.some(u=>u.id===p.id))throw Error('You are not registered.');
-   await send(msg(`${details(s)}\n\n${waiting?'Leave the waitlist?':Date.now()<s.cutoffAt?'Before cutoff: your spot will be canceled immediately.':'After cutoff: request a replacement search. Your booking and fee responsibility remain until a replacement accepts. The search ends after 24 hours or at session start, whichever comes first.'}`,[row(btn(liveId('cancel-confirm',s),waiting?'Leave waitlist':Date.now()<s.cutoffAt?'Confirm cancellation':'Find a replacement',4))]));return;
+   await send(msg(`${details(s)}\n\n${waiting?'Leave the waitlist?':Date.now()<s.cutoffAt?'Before cutoff: your spot will be canceled immediately.':'After cutoff: request a replacement search. Your booking and fee responsibility remain until a replacement accepts. The search ends after 24 hours or at session start, whichever comes first.'}`,[row(btn(liveId('cancel-confirm',s),waiting?'Leave waitlist':Date.now()<s.cutoffAt?'Confirm cancellation':'Find a replacement',4),btn('dismiss-prompt',waiting?'Keep my waitlist spot':'Keep my booking',2))]));return;
   }
   if(a==='cancel-confirm'){
    const r=cancel(s,p.id);if(r.opening)for(const id of r.opening.eligible)job({type:'offer',recipient:id,openingId:r.opening.id,sessionId:s.id});
