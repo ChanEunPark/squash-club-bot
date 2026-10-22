@@ -188,7 +188,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(a==='signup'||a==='join'){
    if(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))throw Error('You are already registered. Use My status.');
    const full=s.members.length>=s.capacity||Date.now()>=s.cutoffAt;
-   await send(msg(`${details(s)}\n\n${full?'Registration is full or the cutoff has passed. Would you like to join the waitlist?':'Would you like to sign up?'}\n\n${policy}\n\nDemo only — no real payment.`,[row(btn(liveId(full?'wait':'register',s),full?'Agree & join waitlist':'Agree & sign up',3),btn('dismiss-prompt','Not now',2))]));return;
+   await send(msg(`${details(s)}\n\n${full?'**Registration is full or the cutoff has passed. Would you like to join the waitlist?**':'Would you like to sign up?'}\n\n${policy}\n\nDemo only — no real payment.`,[row(btn(liveId(full?'wait':'register',s),full?'Agree & join waitlist':'Agree & sign up',3),btn('dismiss-prompt','Not now',2))]));return;
   }
   if(a==='register'||a==='wait'){
    // Test DM delivery before changing the registration, and recheck capacity afterward.
