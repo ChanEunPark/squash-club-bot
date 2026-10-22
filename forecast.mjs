@@ -80,7 +80,7 @@ export function predictOutlook(s,userId,deadline,now=Date.now(),{data=history,tr
   chancePercent:round(base.probability),rangePercent:[round(Math.min(low.probability,base.probability)),round(Math.max(high.probability,base.probability))],
   // Window is conditional on successful confirmation by the user's deadline, not an expected notification promise.
   window:base.times.length>=30?{from:base.times[Math.floor(base.times.length*.2)],to:base.times[Math.floor(base.times.length*.8)]}:null,
-  queuePosition:now<s.cutoffAt?position+1:null,phase:now<s.cutoffAt?'before-cutoff':'after-cutoff',waiters:s.waitlist.length,
+  activeOfferCount:open.length,confirmedCount:s.members.length,capacity:s.capacity,queuePosition:now<s.cutoffAt?position+1:null,phase:now<s.cutoffAt?'before-cutoff':'after-cutoff',waiters:s.waitlist.length,
   historicalSessions:data.sessions.length,minimumProfileSamples:Number.isFinite(minSamples)?minSamples:0,
   uncertainty:'Unvalidated synthetic-data estimate. Range varies cancellation assumptions by ±25%; it is not a confidence interval.',
   factors:[now<s.cutoffAt?'Waitlist registration order applies until cutoff.':'After cutoff, first valid acceptance wins; no queue priority.',
@@ -98,4 +98,11 @@ export function parseDeadline(value,startsAt,now=Date.now()){
  const p=parts(utc);if(p.year!==y||p.month!==m||p.day!==d||p.hour!==h||p.minute!==min)throw Error('That local date/time does not exist. Choose another time.');
  const alternate=parts(utc+HOUR);if(alternate.year===y&&alternate.month===m&&alternate.day===d&&alternate.hour===h&&alternate.minute===min)throw Error('That Eastern time occurs twice during the clock change. Choose a different hour.');
  if(utc<=now||utc>startsAt)throw Error('Choose a future deadline no later than the session start.');return utc;
+}
+
+// Persisted once-per-session boundary event. No catch-up messages for sessions already started.
+export function cutoffOutlookRecipients(s,now=Date.now()){
+ if(s.testRetired||s.cutoffOutlookQueuedAt!==undefined||!Number.isFinite(s.cutoffAt)||now<s.cutoffAt||!Number.isFinite(s.startsAt)||now>=s.startsAt)return [];
+ s.cutoffOutlookQueuedAt=now;
+ return [...new Set(s.waitlist.map(p=>p.id).filter(id=>!String(id).startsWith('fake-')))];
 }
