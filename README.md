@@ -4,7 +4,7 @@ A Discord bot that helps a club fill late cancellations without an organizer con
 
 ## Weekly sessions
 
-Sign up sends a private date picker with the next TWO Wednesday sessions at click time. Sessions run 20:00–22:00 America/New_York, with Monday 15:00 registration cutoffs. The same Wednesday is included until its 20:00 start; afterward the next week is shown. Time conversion follows Eastern daylight saving time. A date whose cutoff passed supports waitlist registration only. Each date has independent capacity, bookings, waitlists, cancellation searches, notification jobs and settlement handoffs. Cancellation and status pickers include the user’s upcoming registrations. The prior one-off test session is preserved separately and is never silently moved to a Wednesday.
+Sign up sends a private date picker with the next TWO Wednesday sessions at click time. Sessions run 20:00–22:00 America/New_York, with Monday 15:00 registration cutoffs. The same Wednesday is included until its 20:00 start; afterward the next week is shown. Time conversion follows Eastern daylight saving time. A date whose cutoff passed supports waitlist registration only. Each date has independent capacity, bookings, waitlists, cancellation searches, notification jobs and settlement handoffs. Cancellation pickers include the user’s upcoming registrations. My status is shown privately in the channel, with a card for each upcoming date and a contextual Book / Cancel booking / View status button. Status checks do not send DMs. The prior one-off test session is preserved separately and is never silently moved to a Wednesday.
 
 ## Booking rules
 
@@ -16,7 +16,7 @@ Sign up sends a private date picker with the next TWO Wednesday sessions at clic
 - Expired searches send the original player a DM explaining that no replacement was found and fee responsibility remains. Offers become **모집 종료 / Search closed**.
 - The bot never collects, transfers, or verifies payments.
 
-The public session panel has **Sign up / Cancel registration / My status**. Registration consent, cancellation confirmation, status and handoff information are delivered by DM. A short private acknowledgement remains in the channel. Users must allow DMs.
+The public session panel has **Sign up / Cancel registration / My status**. Registration consent, cancellation confirmation and handoff information are delivered by DM; My status uses an ephemeral channel response. A short private acknowledgement remains in the channel. Users must allow DMs.
 
 ## Demo
 
@@ -31,7 +31,7 @@ Node.js 24 is recommended. No third-party packages are required.
 3. `npm start` runs the bot.
 4. Server manager: `/configure session:<YYYY-MM-DD> cutoff:<ISO date with offset> start:<ISO date with offset>` sets the registration cutoff and session start. Optional title, location, fee and capacity are supported. Example format: `2026-11-01T15:00:00-05:00`.
 5. `/setup` publishes or updates the session and reviewer panels.
-6. `/my-status` sends personal status by DM.
+6. `/my-status` shows personal status privately in the channel.
 
 Upcoming Wednesday dates are generated automatically. Dates/fees cannot change while existing dated bookings remain, and active searches block reconfiguration. The rolling two-session picker is implemented. Scheduled pre-cutoff reminders, fee calculation and Venmo instructions are not yet included.
 
