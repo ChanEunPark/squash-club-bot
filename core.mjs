@@ -21,13 +21,23 @@ export function join(s, user, {waitlist = false, now = Date.now()} = {}) {
   for (const o of s.openings) if (o.status === 'open' && o.expiresAt > now && o.canceled.id !== user.id && !o.eligible.includes(user.id)) o.eligible.push(user.id);
   return 'waitlisted';
 }
+export function promoteWaitlist(s, now = Date.now()) {
+  if (!Number.isFinite(s.cutoffAt) || !Number.isFinite(s.startsAt) || now >= s.cutoffAt || now >= s.startsAt) return [];
+  const promoted = [];
+  while (s.members.length < s.capacity && s.waitlist.length) {
+    const player = s.waitlist.shift();
+    if (s.members.some(p => p.id === player.id)) continue;
+    s.members.push(player); promoted.push(player);
+  }
+  return promoted;
+}
 export function cancel(s, id, now = Date.now()) {
   ready(s, now);
   const wi = s.waitlist.findIndex(p => p.id === id);
   if (wi >= 0) { s.waitlist.splice(wi, 1); return { kind: 'left-waitlist' }; }
   const member = s.members.find(p => p.id === id);
   if (!member) throw Error('You are not registered for this session.');
-  if (now < s.cutoffAt) { s.members = s.members.filter(p => p.id !== id); return { kind: 'canceled' }; }
+  if (now < s.cutoffAt) { s.members = s.members.filter(p => p.id !== id); return { kind: 'canceled', promoted: promoteWaitlist(s, now) }; }
   if (s.openings.some(o => o.canceled.id === id && o.status === 'open')) throw Error('A replacement search is already in progress. Your fee responsibility remains until a replacement accepts.');
   const o = { id: crypto.randomUUID(), canceled: {...member}, eligible: s.waitlist.map(p => p.id), winner: null, status: 'open', createdAt: now, expiresAt: Math.min(now + DAY, s.startsAt) };
   s.openings.push(o);
