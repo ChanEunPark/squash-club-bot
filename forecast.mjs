@@ -30,9 +30,47 @@ function evidence(player,s,now,data){
  const futureWeight=remaining.reduce((v,t)=>v+t.weight,0);
  const futureMass=total?futureWeight/total:0;
  const conditionalRate=rate*futureMass/(1-rate+rate*futureMass);
- return {rate:conditionalRate,timings:remaining};
+ return {rate:conditionalRate,timings:remaining,historicalRate:rate,overallRate:baseRate,sampleCount:data.records.filter(r=>r.memberId===profile.id).length};
 }
 function weightedSample(items,random){const total=items.reduce((v,t)=>v+t.weight,0);let value=random()*total;return items.find(t=>(value-=t.weight)<=0)||items.at(-1);}
+export function clubInsights(s,deadline,now=Date.now(),data=history){
+ const sessionMap=new Map(data.sessions.map(x=>[x.id,x]));
+ const canceled=data.records.filter(r=>r.canceledAt!==null);
+ const profileEvidence=s.members.map(p=>evidence(p,s,now,data));
+ const baseline=profileEvidence[0]?.overallRate||0;
+ const rosterRate=profileEvidence.length?profileEvidence.reduce((v,e)=>v+e.historicalRate,0)/profileEvidence.length:baseline;
+ const delta=rosterRate-baseline;
+ const pct=n=>Math.round(n*100);
+ const futurePattern=canceled.map(r=>{const past=sessionMap.get(r.sessionId);return s.startsAt-(past.startsAt-r.canceledAt);}).filter(t=>t>now&&t<s.startsAt);
+ const beforeDeadline=futurePattern.filter(t=>t<=deadline).length;
+ const overlap=futurePattern.length?beforeDeadline/futurePattern.length:0;
+ const afterCutoff=canceled.filter(r=>r.canceledAt>=sessionMap.get(r.sessionId).cutoffAt).length;
+ const responses=data.responses.filter(r=>r.accepted).map(r=>r.delayMinutes).sort((a,b)=>a-b);
+ const median=responses.length?responses[Math.floor(responses.length/2)]:null;
+ const findings=[];
+ if(profileEvidence.length)findings.push({id:'lineup-pattern',direction:delta<-.03?'limits':delta>.03?'supports':'neutral',priority:Math.abs(delta)>.03?4:1,
+  observation:delta<-.03?'The mock profiles assigned to this lineup show a lower cancellation tendency than the simulated club baseline.':delta>.03?'The mock profiles assigned to this lineup show a higher cancellation tendency than the simulated club baseline.':'This lineup’s mock cancellation tendency is close to the simulated club baseline.',
+  evidence:`Lineup cancellation tendency: ${pct(rosterRate)}% vs simulated club baseline ${pct(baseline)}% (recency-adjusted, with an overall prior for sparse profiles).`,
+  implication:delta<-.03?'Fewer cancellations from this lineup can limit new openings, even if there is plenty of time left.':delta>.03?'This lineup can create more opportunities than a steadier lineup, but an opening is not a confirmed booking.':'The lineup itself offers little advantage relative to the club baseline.'});
+ if(futurePattern.length)findings.push({id:'deadline-overlap',direction:overlap<.5?'limits':'supports',priority:overlap<.5?5:2,
+  observation:overlap<.5?'Most still-relevant cancellation timings from the mock history fall after the user’s deadline.':'Most still-relevant cancellation timings from the mock history fall before the user’s deadline.',
+  evidence:`${beforeDeadline} of ${futurePattern.length} still-relevant historical cancellation timings fall before your deadline when aligned to this session.`,
+  implication:overlap<.5?'A later opening would not help the user make plans by their selected time.':'There is still time for historically typical opportunities, but their occurrence is uncertain.'});
+ if(canceled.length)findings.push({id:'cancellation-timing',direction:'context',priority:now>=s.cutoffAt?3:2,
+  observation:afterCutoff>canceled.length/2?'In the mock club history, most cancellations happened after registration closed.':'In the mock club history, cancellations were not predominantly after registration closed.',
+  evidence:`${afterCutoff} of ${canceled.length} mock cancellations happened after cutoff, across ${data.sessions.length} sessions.`,
+  implication:afterCutoff>canceled.length/2?'Registration closing does not mean all potential opportunities have already passed.':'Some of the historical cancellation opportunities occurred before registration closed.'});
+ if(now>=s.cutoffAt&&median!==null)findings.push({id:'response-pattern',direction:'limits',priority:4,
+  observation:'Accepting waiters in the mock history often responded promptly to offers.',
+  evidence:`Median response time among ${responses.length} accepting mock waiters: ${median} minutes.`,
+  implication:'After cutoff, responding before other waiters matters; a cancellation alone does not mean this user gets the spot.'});
+ findings.sort((a,b)=>b.priority-a.priority);
+ // Always ground the explanation in actual computed patterns; do not manufacture a causal attribution.
+ const selected=findings.slice(0,2);
+ return {synthetic:true,sessionCount:data.sessions.length,bookingCount:data.records.length,cancellationCount:canceled.length,
+  rosterCancellationPercent:pct(rosterRate),clubCancellationPercent:pct(baseline),deadlineOverlapPercent:pct(overlap),medianAcceptMinutes:median,
+  selected,all:findings};
+}
 export function predictOutlook(s,userId,deadline,now=Date.now(),{data=history,trials=1800}={}){
  const position=s.waitlist.findIndex(p=>p.id===userId);
  if(position<0)return {available:false,reason:'not-waitlisted'};
@@ -81,7 +119,7 @@ export function predictOutlook(s,userId,deadline,now=Date.now(),{data=history,tr
   // Window is conditional on successful confirmation by the user's deadline, not an expected notification promise.
   window:base.times.length>=30?{from:base.times[Math.floor(base.times.length*.2)],to:base.times[Math.floor(base.times.length*.8)]}:null,
   activeOfferCount:open.length,confirmedCount:s.members.length,capacity:s.capacity,queuePosition:now<s.cutoffAt?position+1:null,phase:now<s.cutoffAt?'before-cutoff':'after-cutoff',waiters:s.waitlist.length,
-  historicalSessions:data.sessions.length,minimumProfileSamples:Number.isFinite(minSamples)?minSamples:0,
+  insights:clubInsights(s,deadline,now,data),historicalSessions:data.sessions.length,minimumProfileSamples:Number.isFinite(minSamples)?minSamples:0,
   uncertainty:'Unvalidated synthetic-data estimate. Range varies cancellation assumptions by ±25%; it is not a confidence interval.',
   factors:[now<s.cutoffAt?'Waitlist registration order applies until cutoff.':'After cutoff, first valid acceptance wins; no queue priority.',
    'Current participants are assigned fictional historical profiles for this demo; no real personal history is used.',
