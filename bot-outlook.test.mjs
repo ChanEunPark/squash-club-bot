@@ -1,10 +1,10 @@
-import {test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import * as core from './core.mjs';import * as testing from './testing.mjs';import * as schedule from './schedule.mjs';import {finalizeBilling} from './billing.mjs';import {predictOutlook,parseDeadline} from './forecast.mjs';import {explainOutlook} from './outlook-ai.mjs';
+import {test} from 'node:test';import assert from 'node:assert/strict';import fs from 'node:fs';import * as core from './core.mjs';import * as testing from './testing.mjs';import * as schedule from './schedule.mjs';import {finalizeBilling} from './billing.mjs';import {predictOutlook,parseDeadline,cutoffOutlookRecipients} from './forecast.mjs';import {explainOutlook} from './outlook-ai.mjs';
 async function harness(){
  const requests=[];const env={DISCORD_BOT_TOKEN:'fake',DISCORD_APPLICATION_ID:'app',DISCORD_GUILD_ID:'guild',DISCORD_SESSION_CHANNEL_ID:'session',DISCORD_DEMO_CHANNEL_ID:'controls'};
  const fakeFs={mkdirSync(){},existsSync(){return false},writeFileSync(){},renameSync(){}};
  const fetchImpl=async(url,opts={})=>{const body=opts.body?JSON.parse(opts.body):undefined;requests.push({url,method:opts.method,body});const result=url.endsWith('/oauth2/applications/@me')?{id:'app'}:url.endsWith('/users/@me/channels')?{id:'dm'}:{id:'message',guild_id:'guild'};return new Response(JSON.stringify(result),{status:200});};
  const source=fs.readFileSync(new URL('./bot.mjs',import.meta.url),'utf8').replace(/^import .*;\n/gm,'').split('let sequence=null')[0];
- const deps={...core,...testing,...schedule,finalizeBilling,predictOutlook,parseDeadline,explainOutlook,fs:fakeFs,process:{env,argv:[]},fetch:fetchImpl};
+ const deps={...core,...testing,...schedule,finalizeBilling,predictOutlook,parseDeadline,cutoffOutlookRecipients,explainOutlook,fs:fakeFs,process:{env,argv:[]},fetch:fetchImpl};
  const factory=Object.getPrototypeOf(async function(){}).constructor;
  const bot=await new factory(...Object.keys(deps),source+';return {handle,state,drain,testControls,deadlinePrompt,deadlineButtons};')(...Object.values(deps));
  const s=core.newSession({id:'wed-demo',startsAt:Date.now()+7*core.DAY,cutoffAt:Date.now()+2*core.DAY,capacity:1,members:[{id:'booked'}],waitlist:[]});bot.state.sessions[s.id]=s;
@@ -32,3 +32,5 @@ test('test panel stays within Discord content and component limits with forecast
 });
 
 test('My status overview offers evidence for each waitlisted session',async()=>{const {bot,s,requests,interaction}=await harness();s.waitlist.push({id:'person'});await bot.handle(interaction('status'));const response=requests.filter(r=>r.body?.embeds).at(-1).body;const buttons=response.components.flatMap(r=>r.components);assert.ok(buttons.some(b=>b.custom_id==='forecast-info:'+s.id&&b.label==='About this estimate'));assert.ok(buttons.some(b=>b.custom_id==='status:'+s.id));});
+
+test('cutoff generates a proactive outlook DM once without requiring My status',async()=>{const {bot,s,requests,interaction}=await harness();s.waitlist.push({id:'person'});s.cutoffAt=Date.now()-1000;await bot.handle(interaction('status:'+s.id));await new Promise(resolve=>setImmediate(resolve));await bot.drain();const notices=()=>requests.filter(r=>r.body?.content?.includes('Registration has closed — your waitlist update'));assert.equal(notices().length,1);assert.ok(notices()[0].body.embeds[0].description.includes('watch your DMs'));await bot.handle(interaction('status:'+s.id));await new Promise(resolve=>setImmediate(resolve));await bot.drain();assert.equal(notices().length,1);});
