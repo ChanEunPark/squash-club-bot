@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import {makeTestSession,makeSharedTestSession,simulateCancellation,simulateClaim,isFictional} from './testing.mjs';
+import {makeTestSession,makeSharedTestSession,reminderRecipients,closeTestRegistration,simulateCancellation,simulateClaim,isFictional} from './testing.mjs';
 import {ensureUpcoming,TIME_ZONE} from './schedule.mjs';
 import {newSession,join,cancel,accept,expire,promoteWaitlist,status,validateTimes,DAY} from './core.mjs';
 const env=process.env;
@@ -121,10 +121,25 @@ function demoAction(id,action,key){const d=state.demos[id];if(!d||d.key!==key)th
 }
 function sessionsFor(id){return upcoming();}
 function controlPanel(){return msg('**Test controls**\nRun /test to configure a scenario. Reset clears all bookings, waitlists, replacement searches, and demo/test states across all sessions. It does not delete channel messages.',[row(btn('test','Open test setup',3),btn('reset-all','Reset all data',4))]);}
-function testControls(t){return msg(`**Organizer test controls**\nShared demo session · no real booking or payment.\n${details(t)}\nConfirmed: **${t.members.length}/8** · Waiting: **${t.waitlist.length}**\nYour status: **${status(t,t.organizerId)}**\n\nAll accounts use this same session through #squash-session and their DMs. Fictional players never receive real DMs.`,[
+function testControls(t,notice=''){
+ const closed=Date.now()>=t.cutoffAt,searches=t.openings.filter(o=>o.status==='open'&&o.expiresAt>Date.now()).length;
+ return msg(`**Organizer test controls**\nShared demo session · no real booking or payment.\n${details(t)}\nConfirmed: **${t.members.length}/${t.capacity}** · Waiting: **${t.waitlist.length}**\nYour status: **${status(t,t.organizerId)}**\nRegistration: **${closed?'Closed':'Open'}** · Active replacement searches: **${searches}**\n${notice?`\n✅ ${notice}\n`:''}
+**Button guide**
+• **Send cutoff reminder now** — DM real confirmed/waitlisted players about the cutoff. No time change. Each click sends again.
+• **Close registration now** — move cutoff to now. New signups join the waitlist; cancellations request replacements. Bookings and session time stay.
+• **Simulate player cancellation** — cancel a fictional player. Before cutoff: auto-promote the first waiter. After cutoff: send offers.
+• **Simulate waiter accepting** — a fictional waiter claims an active offer. Needs an eligible fictional waiter.
+• **Expire replacement offers now** — immediately close all active searches for this date, disable offers, and notify original players of failure. Cutoff/session time stay.
+• **Reset this session** — clear this date and restore its schedule, after confirmation.
+• **Change preset** — applying replaces this date’s data for all accounts.
+• **Reset all data** — clear all session/test data after confirmation. Messages stay.
+
+Use #squash-session and each account’s DMs for participant actions. Fictional players never receive DMs.`,[
+ row(btn('test:remind','Send cutoff reminder now',1,closed),btn('test:cutoff','Close registration now',4,closed)),
  row(btn('test:vacancy','Simulate player cancellation'),btn('test:claim','Simulate waiter accepting',2)),
- row(btn('test:expire','Fast-forward deadline',2),btn('test:reset','Reset this session',4)),
- row(btn('test:new','Change preset',2),btn('reset-all','Reset all data',4))]);}
+ row(btn('test:expire','Expire replacement offers now',2,searches===0),btn('test:reset','Reset this session',4)),
+ row(btn('test:new','Change preset',2),btn('reset-all','Reset all data',4))]);
+}
 async function testUI(i,p,action,reply){
  manager(i);if(i.channel_id!==env.DISCORD_DEMO_CHANNEL_ID)throw Error('Open /test in #test-controls.');
  if(action==='test'&&state.sessions[state.sharedTestId]&&!state.sessions[state.sharedTestId].testRetired){await reply(testControls(state.sessions[state.sharedTestId]));return;}
@@ -140,7 +155,13 @@ async function testUI(i,p,action,reply){
  if(step==='reset-confirm'){if(value!==t.id)throw Error('This reset is outdated.');closeSessionSearches(t);delete state.sessions[t.id];delete state.sharedTestId;upcoming();state.sessions[t.id].changedAt=Date.now();save();await refresh();await reply(msg('Shared session reset. Its normal Wednesday schedule is restored.',[row(btn('test','Create another test',3))]));return;}
  if(step==='vacancy'){const r=simulateCancellation(t);notifyPromotions(t,r.promoted);if(r.opening)for(const recipient of r.opening.eligible)job({type:'offer',recipient,openingId:r.opening.id,sessionId:t.id});save();await refresh();await reply(testControls(t));void drain();return;}
  if(step==='claim'){const {opening:o,handoff:h}=simulateClaim(t);queueClose(o);if(!isFictional(h.canceled.id))job({type:'dm',recipient:h.canceled.id,data:msg(`**충원 완료 · Test replacement accepted**\n${details(t)}\n${h.replacement.name} is fictional. In a real handoff, you would receive **${h.fee}** directly. No payment is needed.`)});save();await refresh();await reply(testControls(t));void drain();return;}
- if(step==='expire'){for(const o of t.openings)if(o.status==='open')o.expiresAt=Date.now();sweep();await refresh();await reply(testControls(t));void drain();return;}
+ if(step==='remind'){
+  if(Date.now()>=t.cutoffAt)throw Error('Registration is already closed. Change preset to Before cutoff to test a reminder.');
+  const recipients=reminderRecipients(t);for(const recipient of recipients)job({type:'dm',recipient,sessionId:t.id,data:msg(`⏰ **Registration cutoff reminder**\n${details(t)}\n\n**Please check your plans before ${when(t.cutoffAt)}.** Before cutoff, you can cancel immediately. After cutoff, your booking and fee responsibility remain until a replacement accepts.\nYour status: **${status(t,recipient)}**\nDemo reminder — no payment.`)});
+  save();await reply(testControls(t,`Cutoff reminder queued for ${recipients.length} real player(s). No dates changed.`));void drain();return;
+ }
+ if(step==='cutoff'){closeTestRegistration(t);save();await refresh();await reply(testControls(t,'Registration closed now. Existing bookings are kept; future cancellations request replacements.'));return;}
+ if(step==='expire'){if(!t.openings.some(o=>o.status==='open'))throw Error('No active replacement search to expire. Close registration, then cancel a player first.');for(const o of t.openings)if(o.status==='open')o.expiresAt=Date.now();sweep();await refresh();await reply(testControls(t));void drain();return;}
  throw Error('Unknown test action.');
 }
 async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCORD_GUILD_ID)return;
