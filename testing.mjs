@@ -18,3 +18,10 @@ export function makeSharedTestSession(source,options,user,now=Date.now()){
  t.testShared=true;t.organizerId=user.id;t.changedAt=now;delete t.testOwner;
  return t;
 }
+
+export function reminderRecipients(s){return [...new Set([...s.members,...s.waitlist].filter(p=>!isFictional(p.id)).map(p=>p.id))];}
+export function closeTestRegistration(s,now=Date.now()){
+ if(now>=s.startsAt)throw Error('This session has already started.');
+ if(now>=s.cutoffAt)throw Error('Registration is already closed.');
+ s.cutoffAt=now;s.testPhase='after';
+}
