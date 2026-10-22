@@ -182,7 +182,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    await dm(p.id,msg('Processing your registration…'));
    const result=join(s,p,{waitlist:a==='wait'});save();
    if(result==='needs-waitlist-consent'){await send(msg('The session is full or cutoff has passed. Join the waitlist instead?\n\n'+policy,[row(btn(liveId('wait',s),'Agree & join waitlist',3))]));return;}
-   job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':'You will receive open-spot offers here. First valid acceptance wins.'}\nDemo only — no payment.`)});
+   job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':'✅ **You will receive open-spot offers here. First valid acceptance wins.**'}\nDemo only — no payment.`)});
    if(result==='waitlisted')for(const o of s.openings)if(o.status==='open'&&o.eligible.includes(p.id))job({type:'offer',recipient:p.id,openingId:o.id,sessionId:s.id});
    save();await reply(msg('Registration saved. Check your DMs.'));await refresh();void drain();return;
   }
