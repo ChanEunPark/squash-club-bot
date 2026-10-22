@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {makeTestSession,makeSharedTestSession,simulateCancellation,simulateClaim} from './testing.mjs';import {newSession,expire,join,cancel,accept} from './core.mjs';
+import {makeTestSession,makeSharedTestSession,reminderRecipients,closeTestRegistration,simulateCancellation,simulateClaim} from './testing.mjs';import {newSession,expire,join,cancel,accept} from './core.mjs';
 const user={id:'real',name:'Organizer'},now=100000;
 test('test presets are isolated and preserve the real session',()=>{const source=newSession({startsAt:now+999999999});const t=makeTestSession(source,{preset:'replacement',role:'participant',phase:'after'},user,now);assert.equal(t.members.length,8);assert.equal(t.waitlist.length,2);assert.equal(t.members[0].id,user.id);assert.equal(source.members.length,0);assert.notEqual(t.id,source.id);assert.equal(t.testOwner,user.id);});
 test('real organizer can receive simulated vacancy offer as waiter',()=>{const t=makeTestSession(newSession(),{preset:'replacement',role:'waiter',phase:'after'},user,now);const o=simulateCancellation(t,now).opening;assert.ok(o.eligible.includes(user.id));assert.equal(t.members.length,8);});
@@ -17,3 +17,6 @@ test('shared preset keeps canonical date and is available to two real accounts',
  const o=cancel(t,user.id,now).opening;assert.ok(o.eligible.includes(second.id));accept(t,o.id,second.id,now+1);
  assert.ok(t.members.some(p=>p.id===second.id));assert.ok(!t.members.some(p=>p.id===user.id));assert.equal(t.members.length,8);
 });
+
+test('cutoff control changes cancellation to search without changing booking or start',()=>{const t=makeSharedTestSession(newSession({id:'wed-test',startsAt:now+999999999}),{preset:'replacement',role:'participant',phase:'before'},user,now);const start=t.startsAt;closeTestRegistration(t,now+1);assert.equal(t.startsAt,start);assert.equal(t.members.length,8);assert.equal(cancel(t,user.id,now+1).kind,'searching');assert.throws(()=>closeTestRegistration(t,now+2),/already closed/);});
+test('reminders include real registered players only once and omit fictional accounts',()=>{const t=makeTestSession(newSession(),{preset:'replacement',role:'participant',phase:'before'},user,now);t.waitlist.push({id:'other',name:'Other'},user);assert.deepEqual(reminderRecipients(t),['real','other']);});
