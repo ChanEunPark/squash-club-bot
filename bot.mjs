@@ -125,7 +125,16 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(action==='demo'||action==='demo-start'){await reply(demoStart(p.id));return;}
   if(action.startsWith('demo:')){const [,a,key]=action.split(':');await reply(demoAction(p.id,a,key));return;}
   if(action==='my-status')action='status';
-  if(['signup','join','cancel','status'].includes(action)){
+  if(action==='status'){
+   const next=upcoming();
+   const extra=Object.values(state.sessions).filter(s=>s.startsAt>Date.now()&&!next.some(n=>n.id===s.id)&&(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id)));
+   const sessions=[...next,...extra].slice(0,5);
+   const actions=sessions.map(s=>{const waiting=s.waitlist.some(u=>u.id===p.id),booked=s.members.some(u=>u.id===p.id);return row(btn(liveId(waiting?'status':booked?'cancel':'signup',s),`${shortDate(s)} · ${waiting?'View status':booked?'Cancel booking':'Book'}`,waiting?2:booked?4:3));});
+   const data=msg('**My status**\nOnly you can see this. All times: America/New_York.',actions);
+   data.embeds=sessions.map(s=>({title:shortDate(s),description:`${details(s)}\n\nYour status: **${status(s,p.id)}**`,color:s.waitlist.some(u=>u.id===p.id)?0xe9b949:s.members.some(u=>u.id===p.id)?0x33a474:0x8792a2}));
+   await reply(data);return;
+  }
+  if(['signup','join','cancel'].includes(action)){
    const all=upcoming();const candidates=action==='signup'||action==='join'?all:Object.values(state.sessions).filter(s=>s.startsAt>Date.now()&&(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))).sort((a,b)=>a.startsAt-b.startsAt);
    if(!candidates.length)throw Error('You have no upcoming registrations. Use Sign up to choose a Wednesday.');
    const selectedAction=action==='join'?'signup':action;
@@ -166,7 +175,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(a==='status'){
    const handoffs=s.openings.filter(o=>o.status==='filled'&&(o.winner.id===p.id||o.canceled.id===p.id)).map(o=>{const receiving=o.canceled.id===p.id,other=receiving?o.winner:o.canceled;return `${receiving?'Receive':'Send'} ${s.fee} · ${other.name}\nhttps://discord.com/users/${other.id}`;});
    const offers=s.openings.filter(o=>o.status==='open'&&o.eligible.includes(p.id)&&s.waitlist.some(w=>w.id===p.id));
-   await send(msg(`**My status: ${status(s,p.id)}**\n${details(s)}\n\n${handoffs.join('\n')}\nDemo only — no payment.`,offers.slice(0,5).map(o=>row(btn(`accept:${s.id}:${o.id}`,'Accept available spot',3)))));return;
+   await reply(msg(`**My status: ${status(s,p.id)}**\n${details(s)}\n\n${handoffs.join('\n')}\nDemo only — no payment.`,offers.slice(0,5).map(o=>row(btn(`accept:${s.id}:${o.id}`,'Accept available spot',3)))));return;
   }
   throw Error('This button is outdated. Use the current session panel or /demo.');
  }catch(e){await reply(msg(e.message)).catch(()=>{});console.log('Action could not complete; no credentials logged.');}
