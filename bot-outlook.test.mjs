@@ -19,7 +19,7 @@ test('waitlist confirmation asks for optional deadline; modal submission persist
  const date=new Intl.DateTimeFormat('en-CA',{timeZone:'America/New_York',year:'numeric',month:'2-digit',day:'2-digit'}).format(s.startsAt-86400000)+' 17:00';
  await bot.handle(interaction('forecast-save:'+s.id+':0',[{type:18,component:{custom_id:'deadline',value:date}}]));
  assert.ok(s.outlookPreferences.person.deadline<s.startsAt);const replies=requests.filter(r=>r.body?.embeds);assert.ok(replies.at(-1).body.embeds[0].description.includes('Simulated data'));assert.ok(replies.at(-1).body.embeds[0].description.includes('AI unavailable'));
- await bot.handle(interaction('status:'+s.id));assert.ok(requests.at(-1).body.embeds[0].description.includes('Estimated chance'));assert.equal(s.waitlist.length,1);
+ await bot.handle(interaction('status:'+s.id));const outlook=requests.at(-1).body.embeds[0].description;assert.ok(outlook.includes('When might you hear?'));assert.ok(outlook.indexOf('before your deadline')<outlook.indexOf('%'));assert.ok(outlook.indexOf('%')<outlook.indexOf('When might you hear?'));assert.ok(outlook.indexOf('When might you hear?')<outlook.indexOf('**Why'));assert.ok(!outlook.includes('assumption sensitivity'));assert.equal(s.waitlist.length,1);
 });
 test('skip and expired/invalid modal submissions do not cancel registration or save invalid deadlines',async()=>{
  const {bot,s,requests,interaction}=await harness();s.waitlist.push({id:'person'});
