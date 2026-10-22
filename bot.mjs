@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import {ensureUpcoming,TIME_ZONE} from './schedule.mjs';
 import {newSession,join,cancel,accept,expire,status,validateTimes,DAY} from './core.mjs';
 const env=process.env;
 for(const k of ['DISCORD_BOT_TOKEN','DISCORD_APPLICATION_ID','DISCORD_GUILD_ID','DISCORD_SESSION_CHANNEL_ID','DISCORD_DEMO_CHANNEL_ID'])if(!env[k]||env[k].includes('PASTE_'))throw Error(`Missing configuration: ${k}`);
@@ -13,10 +14,13 @@ async function api(path,method='GET',body){
 fs.mkdirSync('data',{recursive:true});
 const file='data/state.json';
 const state=fs.existsSync(file)?JSON.parse(fs.readFileSync(file,'utf8')):{session:newSession(),panels:{},demos:{},outbox:[]};
-// Preserve old records, but require an organizer to supply dates before new operations.
-state.session={...newSession(),...state.session};state.schema=2;state.jobs??=[];
+// Preserve the old one-off test session separately; never reassign its bookings to a weekly date.
+state.sessions??={};
+if(state.session){const legacy={...newSession(),...state.session};state.sessions[legacy.id]??=legacy;for(const j of state.jobs||[])j.sessionId??=legacy.id;delete state.session;}
+state.schema=3;state.jobs??=[];
 for(const old of state.outbox||[])state.jobs.push({key:crypto.randomUUID(),type:'dm',recipient:old.recipient,data:old.data,attempts:old.attempts||0,nextAt:0});state.outbox=[];
-for(const o of state.session.openings){o.status??=o.winner?'filled':'expired';o.expiresAt??=0;}
+for(const session of Object.values(state.sessions))for(const o of session.openings){o.status??=o.winner?'filled':'expired';o.expiresAt??=0;}
+function upcoming(){const result=ensureUpcoming(state.sessions);save();return result;}
 function save(){fs.writeFileSync(file+'.tmp',JSON.stringify(state,null,2),{mode:0o600});fs.renameSync(file+'.tmp',file);}
 function job(entry){state.jobs.push({key:crypto.randomUUID(),attempts:0,nextAt:0,...entry});}
 const btn=(id,label,style=1,disabled=false)=>({type:2,custom_id:id,label,style,disabled});
@@ -25,17 +29,19 @@ const msg=(content,components=[])=>({content,components,allowed_mentions:{parse:
 const when=t=>Number.isFinite(t)?`<t:${Math.floor(t/1000)}:F>`:'Not configured';
 const policy='Before the registration cutoff, cancellations release your spot immediately. After cutoff, we search for a replacement for up to 24 hours (or until the session starts). Your fee responsibility remains until someone accepts. All waitlisted players are notified; the first valid acceptance received by the bot wins. Discord contact is shared with your match only. Payments are settled directly, without collection or verification by this bot.';
 function details(s){return `**${s.title}**\nSession: ${when(s.startsAt)}\nRegistration cutoff: ${when(s.cutoffAt)}\nLocation: ${s.location}\nFee: **${s.fee}**`;}
-const liveId=(action)=>`${action}:${state.session.id}`;
-function panel(){const s=state.session;return msg(`🏸 ${details(s)}\n\nConfirmed: **${s.members.length}/${s.capacity}** · Waiting: **${s.waitlist.length}**\n${s.members.map(p=>`• ${p.name}${s.openings.some(o=>o.canceled.id===p.id&&o.status==='open')?' — replacement search':''}`).join('\n')}\n\nUse the buttons below. Personal instructions and updates arrive by DM.\n**Demo environment — no real booking or payment.**`,[row(btn(liveId('signup'),'Sign up',3),btn(liveId('cancel'),'Cancel registration',2),btn(liveId('status'),'My status',2))]);}
+const liveId=(action,s)=>`${action}:${s.id}`;
+const shortDate=s=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'short',month:'short',day:'numeric'}).format(s.startsAt);
+function panel(){const sessions=upcoming();return msg(`🏸 **Wednesday Squash**\nEvery Wednesday · **8–10 PM America/New_York**\nRegistration cutoff: **Monday 3 PM ET**\n\n${sessions.map(s=>`${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waiting: **${s.waitlist.length}**`).join('\n\n')}\n\nChoose an action below, then select a session in your DMs. Session options are recalculated when you click.\n**Demo environment — no real booking or payment.**`,[row(btn('signup','Sign up',3),btn('cancel','Cancel registration',2),btn('status','My status',2))]);}
 async function dm(id,data){const c=await api('/users/@me/channels','POST',{recipient_id:id});const m=await api(`/channels/${c.id}/messages`,'POST',data);return {channel:c.id,id:m.id};}
 async function refresh(){if(state.panels.session)await api(`/channels/${env.DISCORD_SESSION_CHANNEL_ID}/messages/${state.panels.session}`,'PATCH',panel());}
 async function putPanel(key,channel,data){if(state.panels[key]){try{await api(`/channels/${channel}/messages/${state.panels[key]}`,'PATCH',data);return;}catch(e){if(e.httpStatus!==404)throw e;}}const m=await api(`/channels/${channel}/messages`,'POST',data);state.panels[key]=m.id;save();}
-function offer(o){const s=state.session;return msg(`**A spot is available**\n${details(s)}\nAccept by: ${when(o.expiresAt)}\n\nFirst valid acceptance wins. Accepting confirms your booking and connects you with the original player for direct settlement.\nTest only — do not send money.`,[row(btn(`accept:${s.id}:${o.id}`,'Accept spot',3))]);}
+function offer(o,s){return msg(`**A spot is available**\n${details(s)}\nAccept by: ${when(o.expiresAt)}\n\nFirst valid acceptance wins. Accepting confirms your booking and connects you with the original player for direct settlement.\nTest only — do not send money.`,[row(btn(`accept:${s.id}:${o.id}`,'Accept spot',3))]);}
 function closedOffer(o){const filled=o.status==='filled';return msg(filled?'**충원 완료 · Spot filled**\nThis spot has been filled. Other waitlisted players remain on the waitlist.':'**모집 종료 · Search closed**\nNo replacement was found before the deadline. This offer is no longer available.',[row(btn(`closed:${o.id}`,filled?'충원 완료':'모집 종료',2,true))]);}
 function queueClose(o){for(const ref of o.messages||[])job({type:'edit',ref,data:closedOffer(o)});}
 function sweep(now=Date.now()){
-  for(const o of expire(state.session,now)){
-    job({type:'dm',recipient:o.canceled.id,data:msg(`**No replacement found**\n${details(state.session)}\n\nThe replacement search has ended. Your original fee responsibility remains. No real payment is required in this demo.`)});queueClose(o);
+  ensureUpcoming(state.sessions,now);
+  for(const s of Object.values(state.sessions))for(const o of expire(s,now)){
+    job({type:'dm',recipient:o.canceled.id,data:msg(`**No replacement found**\n${details(s)}\n\nThe replacement search has ended. Your original fee responsibility remains. No real payment is required in this demo.`)});queueClose(o);
   }
   save();
 }
@@ -45,9 +51,10 @@ async function drain(){if(draining)return;draining=true;try{
   for(const j of state.jobs.filter(j=>j.attempts<5&&j.nextAt<=Date.now()).slice(0,20)){
     try{
       if(j.type==='offer'){
-        const o=state.session.openings.find(o=>o.id===j.openingId);
-        if(!o||o.status!=='open'||o.expiresAt<=Date.now()||!state.session.waitlist.some(p=>p.id===j.recipient)){state.jobs=state.jobs.filter(x=>x.key!==j.key);save();continue;}
-        const ref=await dm(j.recipient,offer(o));o.messages??=[];o.messages.push(ref);
+        const session=state.sessions[j.sessionId];
+        const o=session?.openings.find(o=>o.id===j.openingId);
+        if(!o||o.status!=='open'||o.expiresAt<=Date.now()||!session.waitlist.some(p=>p.id===j.recipient)){state.jobs=state.jobs.filter(x=>x.key!==j.key);save();continue;}
+        const ref=await dm(j.recipient,offer(o,session));o.messages??=[];o.messages.push(ref);
         // A claim may arrive while the send request is in flight.
         if(o.status!=='open'||o.expiresAt<=Date.now())job({type:'edit',ref,data:closedOffer(o)});
       }else if(j.type==='edit')await api(`/channels/${j.ref.channel}/messages/${j.ref.id}`,'PATCH',j.data);
@@ -60,6 +67,7 @@ async function drain(){if(draining)return;draining=true;try{
 const commands=[
  {name:'setup',description:'Publish or refresh the session and demo panels',default_member_permissions:'32'},
  {name:'configure',description:'Set session dates and details; never resets existing registrations',default_member_permissions:'32',options:[
+  {type:3,name:'session',description:'Session date YYYY-MM-DD, e.g. 2026-10-28',required:true},
   {type:3,name:'cutoff',description:'ISO date with timezone, e.g. 2026-10-25T15:00:00-04:00',required:true},
   {type:3,name:'start',description:'ISO date with timezone, after cutoff',required:true},
   {type:3,name:'title',description:'Session name',required:false,max_length:100},
@@ -109,41 +117,45 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(action==='setup'){manager(i);await putPanel('session',env.DISCORD_SESSION_CHANNEL_ID,panel());await putPanel('demo',env.DISCORD_DEMO_CHANNEL_ID,msg('**Try the booking and replacement flow**\nPrivately test cancellation before cutoff, a successful replacement, and a 24-hour timeout. No other players or payment needed.',[row(btn('demo-start','Start demo',3))]));await reply(msg('Panels updated.'));return;}
   if(action==='configure'){
    manager(i);const opts=Object.fromEntries(i.data.options.map(o=>[o.name,o.value]));const times=validateTimes(opts.cutoff,opts.start);
-   const s=state.session;if(s.openings.some(o=>o.status==='open'))throw Error('Finish active replacement searches before changing dates.');
+   const s=Object.values(state.sessions).find(s=>s.id===`wed-${opts.session}`);if(!s)throw Error('Select one of the currently available Wednesday dates.');if(s.openings.some(o=>o.status==='open'))throw Error('Finish active replacement searches before changing dates.');
    if(s.members.length&&Number.isFinite(s.cutoffAt)&&(s.cutoffAt!==times.cutoffAt||s.startsAt!==times.startsAt||opts.fee&&opts.fee!==s.fee))throw Error('Dates and fees cannot change while bookings exist. Cancel the test bookings first.');
    if(opts.capacity&&opts.capacity<s.members.length)throw Error('Capacity cannot be smaller than current bookings.');
    Object.assign(s,times);for(const k of ['title','location','fee','capacity'])if(opts[k]!==undefined)s[k]=opts[k];save();await refresh();await reply(msg(`Session configured.\n${details(s)}`));return;
   }
   if(action==='demo'||action==='demo-start'){await reply(demoStart(p.id));return;}
   if(action.startsWith('demo:')){const [,a,key]=action.split(':');await reply(demoAction(p.id,a,key));return;}
-  if(action==='my-status')action=`status:${state.session.id}`;
-  const [a,sid,oid]=action.split(':');
-  // Old public panels can still redirect users until /setup refreshes them.
-  if(['join','status','cancel'].includes(action))action=undefined;
-  else if(sid!==state.session.id)throw Error('This belongs to an outdated session. Use the latest session buttons.');
-  const s=state.session;
+  if(action==='my-status')action='status';
+  if(['signup','join','cancel','status'].includes(action)){
+   const all=upcoming();const candidates=action==='signup'||action==='join'?all:Object.values(state.sessions).filter(s=>s.startsAt>Date.now()&&(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))).sort((a,b)=>a.startsAt-b.startsAt);
+   if(!candidates.length)throw Error('You have no upcoming registrations. Use Sign up to choose a Wednesday.');
+   const selectedAction=action==='join'?'signup':action;
+   await dm(p.id,msg(`**Choose a session**\nAll times: America/New_York. Wednesdays 8–10 PM; signup cutoff Monday 3 PM.\n\n${candidates.slice(0,5).map(s=>`${details(s)}\nYour status: **${status(s,p.id)}**`).join('\n\n')}`,candidates.slice(0,5).map(s=>row(btn(liveId(selectedAction,s),shortDate(s),3)))));
+   await reply(msg('📩 Choose a session in your DMs.'));return;
+  }
+  const [a,sid,oid]=action.split(':');const s=state.sessions[sid];
+  if(!s)throw Error('This session is no longer available. Use the latest session buttons.');
   const send=async data=>{await dm(p.id,data);await reply(msg('📩 Check your DMs from Squash Club Bot.'));};
   if(a==='signup'||a==='join'){
    if(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))throw Error('You are already registered. Use My status.');
    const full=s.members.length>=s.capacity||Date.now()>=s.cutoffAt;
-   await send(msg(`${details(s)}\n\n${full?'Registration is full or the cutoff has passed. Would you like to join the waitlist?':'Would you like to sign up?'}\n\n${policy}\n\nDemo only — no real payment.`,[row(btn(liveId(full?'wait':'register'),full?'Agree & join waitlist':'Agree & sign up',3))]));return;
+   await send(msg(`${details(s)}\n\n${full?'Registration is full or the cutoff has passed. Would you like to join the waitlist?':'Would you like to sign up?'}\n\n${policy}\n\nDemo only — no real payment.`,[row(btn(liveId(full?'wait':'register',s),full?'Agree & join waitlist':'Agree & sign up',3))]));return;
   }
   if(a==='register'||a==='wait'){
    // Test DM delivery before changing the registration, and recheck capacity afterward.
    if(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id))throw Error('You are already registered. Use My status.');
    await dm(p.id,msg('Processing your registration…'));
    const result=join(s,p,{waitlist:a==='wait'});save();
-   if(result==='needs-waitlist-consent'){await send(msg('The session is full or cutoff has passed. Join the waitlist instead?\n\n'+policy,[row(btn(liveId('wait'),'Agree & join waitlist',3))]));return;}
+   if(result==='needs-waitlist-consent'){await send(msg('The session is full or cutoff has passed. Join the waitlist instead?\n\n'+policy,[row(btn(liveId('wait',s),'Agree & join waitlist',3))]));return;}
    job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':'You will receive open-spot offers here. First valid acceptance wins.'}\nDemo only — no payment.`)});
-   if(result==='waitlisted')for(const o of s.openings)if(o.status==='open'&&o.eligible.includes(p.id))job({type:'offer',recipient:p.id,openingId:o.id});
+   if(result==='waitlisted')for(const o of s.openings)if(o.status==='open'&&o.eligible.includes(p.id))job({type:'offer',recipient:p.id,openingId:o.id,sessionId:s.id});
    save();await reply(msg('Registration saved. Check your DMs.'));await refresh();void drain();return;
   }
   if(a==='cancel'){
    const waiting=s.waitlist.some(u=>u.id===p.id);if(!waiting&&!s.members.some(u=>u.id===p.id))throw Error('You are not registered.');
-   await send(msg(`${details(s)}\n\n${waiting?'Leave the waitlist?':Date.now()<s.cutoffAt?'Before cutoff: your spot will be canceled immediately.':'After cutoff: request a replacement search. Your booking and fee responsibility remain until a replacement accepts. The search ends after 24 hours or at session start, whichever comes first.'}`,[row(btn(liveId('cancel-confirm'),waiting?'Leave waitlist':Date.now()<s.cutoffAt?'Confirm cancellation':'Find a replacement',4))]));return;
+   await send(msg(`${details(s)}\n\n${waiting?'Leave the waitlist?':Date.now()<s.cutoffAt?'Before cutoff: your spot will be canceled immediately.':'After cutoff: request a replacement search. Your booking and fee responsibility remain until a replacement accepts. The search ends after 24 hours or at session start, whichever comes first.'}`,[row(btn(liveId('cancel-confirm',s),waiting?'Leave waitlist':Date.now()<s.cutoffAt?'Confirm cancellation':'Find a replacement',4))]));return;
   }
   if(a==='cancel-confirm'){
-   const r=cancel(s,p.id);if(r.opening)for(const id of r.opening.eligible)job({type:'offer',recipient:id,openingId:r.opening.id});
+   const r=cancel(s,p.id);if(r.opening)for(const id of r.opening.eligible)job({type:'offer',recipient:id,openingId:r.opening.id,sessionId:s.id});
    job({type:'dm',recipient:p.id,data:msg(r.kind==='searching'?`**Replacement search started**\n${details(s)}\nDeadline: ${when(r.opening.expiresAt)}\nYour booking and fee responsibility remain until someone accepts. We will DM the result, including if no replacement is found.`:r.kind==='canceled'?'**Cancellation complete**\nYour pre-cutoff booking has been removed.':'**You have left the waitlist.**')});save();await reply(msg('Request saved. Check your DMs.'));await refresh();void drain();return;
   }
   if(a==='accept'){
@@ -174,6 +186,7 @@ function connect(){
  ws.onerror=()=>console.log('Discord connection interrupted.');
  ws.onclose=e=>{clearInterval(heartbeat);if([4004,4010,4011,4013,4014].includes(e.code)){console.log(`Connection configuration error ${e.code}`);process.exit(1);}if(!stopped)setTimeout(connect,3000);};
 }
-const timer=setInterval(()=>{sweep();void drain();},15000);
+let lastWeeklyIds=upcoming().map(s=>s.id).join(',');
+const timer=setInterval(()=>{sweep();void drain();const ids=upcoming().map(s=>s.id).join(',');if(ids!==lastWeeklyIds){lastWeeklyIds=ids;void refresh().catch(()=>console.log('Panel refresh deferred.'));}},15000);
 connect();
 for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{stopped=true;clearInterval(timer);clearInterval(heartbeat);save();connection?.close();process.exit(0);});
