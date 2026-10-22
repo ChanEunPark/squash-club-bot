@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import {makeTestSession,makeSharedTestSession,simulateCancellation,simulateClaim,isFictional} from './testing.mjs';
 import {ensureUpcoming,TIME_ZONE} from './schedule.mjs';
-import {newSession,join,cancel,accept,expire,status,validateTimes,DAY} from './core.mjs';
+import {newSession,join,cancel,accept,expire,promoteWaitlist,status,validateTimes,DAY} from './core.mjs';
 const env=process.env;
 for(const k of ['DISCORD_BOT_TOKEN','DISCORD_APPLICATION_ID','DISCORD_GUILD_ID','DISCORD_SESSION_CHANNEL_ID','DISCORD_DEMO_CHANNEL_ID'])if(!env[k]||env[k].includes('PASTE_'))throw Error(`Missing configuration: ${k}`);
 async function api(path,method='GET',body){
@@ -30,7 +30,7 @@ const btn=(id,label,style=1,disabled=false)=>({type:2,custom_id:id,label,style,d
 const row=(...components)=>({type:1,components});
 const msg=(content,components=[])=>({content,components,allowed_mentions:{parse:[]}});
 const when=t=>Number.isFinite(t)?`<t:${Math.floor(t/1000)}:F>`:'Not configured';
-const policy='Before the registration cutoff, cancellations release your spot immediately. After cutoff, we search for a replacement for up to 24 hours (or until the session starts). Your fee responsibility remains until someone accepts. All waitlisted players are notified; the first valid acceptance received by the bot wins. Discord contact is shared with your match only. Payments are settled directly, without collection or verification by this bot.';
+const policy='Before the registration cutoff, cancellations release your spot immediately and waitlisted players are automatically confirmed in waitlist registration order. After cutoff, we search for a replacement for up to 24 hours (or until the session starts). Your fee responsibility remains until someone accepts. After cutoff, all waitlisted players are notified; the first valid acceptance received by the bot wins. Discord contact is shared with your match only. Payments are settled directly, without collection or verification by this bot.';
 function details(s){return `**${s.title}**\nSession: ${when(s.startsAt)}\nRegistration cutoff: ${when(s.cutoffAt)}\nLocation: ${s.location}\n${Date.now()<s.cutoffAt?'Estimated fee: **$15–20 per person**':`Fee: **${s.fee}**`}`;}
 const liveId=(action,s)=>`${action}:${s.id}`;
 const shortDate=s=>new Intl.DateTimeFormat('en-US',{timeZone:TIME_ZONE,weekday:'short',month:'short',day:'numeric'}).format(s.startsAt);
@@ -41,12 +41,14 @@ async function putPanel(key,channel,data){if(state.panels[key]){try{await api(`/
 function offer(o,s){return msg(`**A spot is available**\n${details(s)}\nAccept by: ${when(o.expiresAt)}\n\nFirst valid acceptance wins. Accepting confirms your booking and connects you with the original player for direct settlement.\nTest only — do not send money.`,[row(btn(`accept:${s.id}:${o.id}`,'Accept spot',3))]);}
 function closedOffer(o){const filled=o.status==='filled';return msg(filled?'**충원 완료 · Spot filled**\nThis spot has been filled. Other waitlisted players remain on the waitlist.':'**모집 종료 · Search closed**\nNo replacement was found before the deadline. This offer is no longer available.',[row(btn(`closed:${o.id}`,filled?'충원 완료':'모집 종료',2,true))]);}
 function queueClose(o){for(const ref of o.messages||[])job({type:'edit',ref,data:closedOffer(o)});}
+function notifyPromotions(s,players){for(const player of players||[])job({type:'dm',sessionId:s.id,recipient:player.id,data:msg(`✅ **You’re automatically confirmed!**\n${details(s)}\n\nA spot opened before the registration cutoff. You were moved from the waitlist in registration order. No acceptance is needed.\nDemo only — no payment.`)});}
 function sweep(now=Date.now()){
-  ensureUpcoming(state.sessions,now);
+  ensureUpcoming(state.sessions,now);let promotedAny=false;
+  for(const s of Object.values(state.sessions).filter(s=>!s.testRetired)){const players=promoteWaitlist(s,now);notifyPromotions(s,players);if(players.length)promotedAny=true;}
   for(const s of Object.values(state.sessions).filter(s=>!s.testRetired))for(const o of expire(s,now)){
     job({type:'dm',recipient:o.canceled.id,data:msg(`**No replacement found**\n${details(s)}\n\nThe replacement search has ended. Your original fee responsibility remains. No real payment is required in this demo.`)});queueClose(o);
   }
-  save();
+  save();if(promotedAny)void refresh().catch(()=>console.log('Panel refresh deferred.'));
 }
 let draining=false;
 async function drain(){if(draining)return;draining=true;try{
@@ -106,7 +108,7 @@ function demoAction(id,action,key){const d=state.demos[id];if(!d||d.key!==key)th
  if(action==='cancel'){
   if(!['pre','post'].includes(d.stage))throw Error('This step is already complete.');
   const result=cancel(d.s,'alex',d.stage==='pre'?99:100);
-  if(result.kind==='canceled'){d.stage='done';save();return msg('**Cancellation complete**\nBefore cutoff: Alex is removed immediately. No replacement search or settlement handoff was created.',[row(btn('demo-start','Try again',2))]);}
+  if(result.kind==='canceled'){d.stage='done';save();return msg('**Cancellation complete**\nBefore cutoff: Alex is removed immediately and the first waitlisted player is automatically confirmed. No settlement handoff was created.',[row(btn('demo-start','Try again',2))]);}
   d.o=result.opening.id;d.stage='offered';save();return msg('**A spot is available**\nAlex remains responsible for the fee. You and fictional Sam receive the offer. It expires 24 hours after the search starts, or at session start if sooner.\n\nChoose an outcome:',[row(btn(`demo:accept:${key}`,'Accept spot',3),btn(`demo:other:${key}`,'Sam accepts first',2),btn(`demo:expire:${key}`,'Fast-forward 24h',2))]);
  }
  if(d.stage!=='offered')throw Error('This offer is closed. Start another demo.');
@@ -136,7 +138,7 @@ async function testUI(i,p,action,reply){
  const t=state.sessions[state.sharedTestId];if(!t||t.testRetired||!t.testShared)throw Error('Create a test with /test first.');
  if(step==='reset'){await reply(msg('**Reset this shared session?**\nThis clears this date’s registrations for all accounts and restores its normal Wednesday schedule. Other dates are unchanged.',[row(btn(`test:reset-confirm:${t.id}`,'Confirm reset',4))]));return;}
  if(step==='reset-confirm'){if(value!==t.id)throw Error('This reset is outdated.');closeSessionSearches(t);delete state.sessions[t.id];delete state.sharedTestId;upcoming();state.sessions[t.id].changedAt=Date.now();save();await refresh();await reply(msg('Shared session reset. Its normal Wednesday schedule is restored.',[row(btn('test','Create another test',3))]));return;}
- if(step==='vacancy'){const r=simulateCancellation(t);if(r.opening)for(const recipient of r.opening.eligible)job({type:'offer',recipient,openingId:r.opening.id,sessionId:t.id});save();await refresh();await reply(testControls(t));void drain();return;}
+ if(step==='vacancy'){const r=simulateCancellation(t);notifyPromotions(t,r.promoted);if(r.opening)for(const recipient of r.opening.eligible)job({type:'offer',recipient,openingId:r.opening.id,sessionId:t.id});save();await refresh();await reply(testControls(t));void drain();return;}
  if(step==='claim'){const {opening:o,handoff:h}=simulateClaim(t);queueClose(o);if(!isFictional(h.canceled.id))job({type:'dm',recipient:h.canceled.id,data:msg(`**충원 완료 · Test replacement accepted**\n${details(t)}\n${h.replacement.name} is fictional. In a real handoff, you would receive **${h.fee}** directly. No payment is needed.`)});save();await refresh();await reply(testControls(t));void drain();return;}
  if(step==='expire'){for(const o of t.openings)if(o.status==='open')o.expiresAt=Date.now();sweep();await refresh();await reply(testControls(t));void drain();return;}
  throw Error('Unknown test action.');
@@ -203,7 +205,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    await dm(p.id,msg('Processing your registration…'));
    const result=join(s,p,{waitlist:a==='wait'});save();
    if(result==='needs-waitlist-consent'){await send(msg('The session is full or cutoff has passed. Join the waitlist instead?\n\n'+policy,[row(btn(liveId('wait',s),'Agree & join waitlist',3),btn('dismiss-prompt','Not now',2))]));return;}
-   job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':'✅ **You will receive open-spot offers here. First valid acceptance wins.**'}\nDemo only — no payment.`)});
+   job({type:'dm',recipient:p.id,data:msg(`${result==='joined'?'**Booking confirmed**':'**Waitlist registration confirmed**'}\n${details(s)}\n\n${result==='joined'?'Before cutoff, use Cancel registration to cancel.':Date.now()<s.cutoffAt?'✅ **Before cutoff, you will be automatically confirmed in waitlist registration order when a spot opens. After cutoff, offers arrive here and the first valid acceptance wins.**':'✅ **You will receive open-spot offers here. First valid acceptance wins.**'}\nDemo only — no payment.`)});
    if(result==='waitlisted')for(const o of s.openings)if(o.status==='open'&&o.eligible.includes(p.id))job({type:'offer',recipient:p.id,openingId:o.id,sessionId:s.id});
    save();await reply(msg('Registration saved. Check your DMs.'));await refresh();void drain();return;
   }
@@ -212,7 +214,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    await send(msg(`${details(s)}\n\n${waiting?'Leave the waitlist?':Date.now()<s.cutoffAt?'Before cutoff: your spot will be canceled immediately.':'After cutoff: request a replacement search. Your booking and fee responsibility remain until a replacement accepts. The search ends after 24 hours or at session start, whichever comes first.'}`,[row(btn(liveId('cancel-confirm',s),waiting?'Leave waitlist':Date.now()<s.cutoffAt?'Confirm cancellation':'Find a replacement',4),btn('dismiss-prompt',waiting?'Keep my waitlist spot':'Keep my booking',2))]));return;
   }
   if(a==='cancel-confirm'){
-   const r=cancel(s,p.id);if(r.opening)for(const id of r.opening.eligible)job({type:'offer',recipient:id,openingId:r.opening.id,sessionId:s.id});
+   const r=cancel(s,p.id);notifyPromotions(s,r.promoted);if(r.opening)for(const id of r.opening.eligible)job({type:'offer',recipient:id,openingId:r.opening.id,sessionId:s.id});
    job({type:'dm',recipient:p.id,data:msg(r.kind==='searching'?`**Replacement search started**\n${details(s)}\nDeadline: ${when(r.opening.expiresAt)}\nYour booking and fee responsibility remain until someone accepts. We will DM the result, including if no replacement is found.`:r.kind==='canceled'?'**Cancellation complete**\nYour pre-cutoff booking has been removed.':'**You have left the waitlist.**')});save();await reply(msg('Request saved. Check your DMs.'));await refresh();void drain();return;
   }
   if(a==='accept'){
