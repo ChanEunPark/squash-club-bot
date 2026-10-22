@@ -10,4 +10,11 @@ export function makeTestSession(source,{preset,role,phase},user,now=Date.now()){
  return s;
 }
 export function simulateCancellation(s,now=Date.now()){const p=s.members.find(p=>isFictional(p.id));if(!p)throw Error('No fictional confirmed player is available. Choose a preset with more players.');return cancel(s,p.id,now);}
-export function simulateClaim(s,now=Date.now()){const o=s.openings.find(o=>o.status==='open'&&o.expiresAt>now);const p=s.waitlist.find(p=>isFictional(p.id)&&o?.eligible.includes(p.id));if(!o||!p)throw Error('Create an open search with fictional waiters first.');return {opening:o,handoff:accept(s,o.id,p.id,now)};}
+export function simulateClaim(s,now=Date.now()){const o=s.openings.find(o=>o.status==='open'&&o.expiresAt>now);const p=s.waitlist.find(p=>isFictional(p.id)&&o?.eligible.includes(p.id));if(!o)throw Error(now<s.cutoffAt?'This test is before cutoff: cancellation releases the spot immediately, so no replacement offer is created. Choose Change preset → Replacement · 8 + 2 → After cutoff to test replacement acceptance.':'No active replacement search. Simulate player cancellation first.');if(!p)throw Error('No fictional waiter can accept. If you are the only waiter, accept the offer in your DMs. To simulate another waiter winning, choose Replacement · 8 + 2.');return {opening:o,handoff:accept(s,o.id,p.id,now)};}
+
+export function makeSharedTestSession(source,options,user,now=Date.now()){
+ const t=makeTestSession({...source,title:source.title.replace(/^TEST · /,'')},options,user,now);
+ t.id=source.id;t.startsAt=source.startsAt;t.endsAt=source.endsAt;
+ t.testShared=true;t.organizerId=user.id;t.changedAt=now;delete t.testOwner;
+ return t;
+}
