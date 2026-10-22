@@ -1,35 +1,52 @@
 # Squash Club Bot
 
-Discord bot for cancellation handoffs: notify all registered waiters, confirm one winner, and privately connect the replacement with the prepaid canceled player. No payment collection or verification.
+A Discord bot that helps a club fill late cancellations without an organizer contacting every player individually.
 
-## Run
+## Booking rules
 
-Requires Node.js 22+ (native WebSocket and fetch). No third-party packages.
+- Before the registration cutoff: cancellation removes the booking immediately.
+- After cutoff: cancellation starts a replacement search. The original booking and fee responsibility remain until a replacement accepts.
+- All registered waitlisted players receive personal offers. The first valid acceptance processed by the bot wins, independent of waitlist order.
+- Offers expire 24 hours after the search starts, or at session start, whichever comes first. Late acceptances are rejected even before the background timer runs.
+- Successful handoffs privately connect the two players with the amount to settle directly. Previous offers become **충원 완료 / Spot filled**, with disabled buttons.
+- Expired searches send the original player a DM explaining that no replacement was found and fee responsibility remains. Offers become **모집 종료 / Search closed**.
+- The bot never collects, transfers, or verifies payments.
 
-1. Set the bot token and Discord IDs in `.env` (never commit it).
-2. `node --env-file=.env bot.mjs --register`
-3. `node --env-file=.env bot.mjs`
-4. As a server manager, invoke `/setup` to post the two panels.
-5. Try `/demo` for an isolated fictional walkthrough.
+The public session panel has **Sign up / Cancel registration / My status**. Registration consent, cancellation confirmation, status and handoff information are delivered by DM. A short private acknowledgement remains in the channel. Users must allow DMs.
 
-All session content is explicitly marked as test data. The sample fee is 15,000 KRW. No actual booking, collection or payment is performed. Discord identity is used as contact information; no phone number is collected.
+## Demo
 
-## Checks
+Use `/demo` or the reviewer channel's Start demo button. Each user gets an isolated fictional walkthrough covering pre-cutoff cancellation, successful post-cutoff replacement, another waiter winning, and fast-forwarding 24-hour expiry. The demo uses the same core functions; fictional participants and preview messages are clearly identified. No payment or other real accounts are required for this walkthrough. Multi-account live delivery is a separate integration check.
 
-`node --test`
+## Configuration
 
-Test with two or more consenting Discord accounts for actual DM and competing acceptance behavior. The solo demo uses the same participation functions, but the other players and their messages are simulated and labeled.
+Node.js 24 is recommended. No third-party packages are required.
 
-## Persistence and hosting
+1. Copy `.env.example` to `.env` and fill in the five values locally. Never commit the token.
+2. `node --env-file=.env bot.mjs --register` registers the server commands.
+3. `npm start` runs the bot.
+4. Server manager: `/configure cutoff:<ISO date with offset> start:<ISO date with offset>` sets the registration cutoff and session start. Optional title, location, fee and capacity are supported. Example format: `2026-11-01T15:00:00-05:00`.
+5. `/setup` publishes or updates the session and reviewer panels.
+6. `/my-status` sends personal status by DM.
 
-### Railway deployment
+A session without dates must be configured before registration. Dates/fees cannot change while existing dated bookings remain, and active searches block reconfiguration. This version supports a single session; date selection across multiple sessions, scheduled pre-cutoff reminders, fee calculation and Venmo instructions are not yet included.
 
-Connect this repository as a persistent service. The included Dockerfile pins Node 24 and copies only runtime source files. Add the five environment variables listed in `.env.example` using Railway Variables. Never upload `.env`. Attach a persistent volume at `/app/data` BEFORE starting the bot. Use one replica and keep serverless/sleep disabled. No public domain or incoming HTTP port is required for this Gateway bot.
+## Hosting
 
-Before the first cloud start, stop the local instance so two processes do not handle the same buttons. Existing Discord command registrations remain valid. A fresh volume starts with an empty test session; run `/setup` once to publish new panels. Previous local registrations are not migrated automatically. Keep the local `data/` folder as a backup. Check deployment logs for `Bot online`, then test `/demo`, restart the deployment, and verify it responds again.
+Run exactly ONE process with persistent `data/` storage. `data/state.json` stores bookings, search deadlines, demo progress, offer message references and pending notification jobs. Each successful state change is saved through atomic file replacement. The 15-second scheduler expires overdue searches on startup and periodically, including after downtime.
 
-`data/state.json` contains the session, per-user demo progress, panel IDs and pending DM notifications. Run only ONE bot process with this file, on a persistent disk. It is not a multi-instance database. For deployment, configure environment variables and keep the process running continuously; a local development session stops when the computer sleeps or the process exits. Do not submit the local run as permanently hosted.
+Failed notifications retry up to five times with backoff; permanent Discord 403/404 failures stop retrying. A notification already sent immediately before a crash may be repeated (at-least-once delivery). Discord delivery times are not identical across recipients. Users can request their current information via My status; blocked DMs must be enabled. This file-based implementation is not designed for multiple replicas.
 
-Pending DMs retry on reconnect, at most three attempts total; `/my-status` shows handoff details even if DMs fail. Once filled, stale offers return a closed response. There is no expiry scheduler in this first version. Sample sessions are for test use only; organizer session editing and an actual booking/payment deadline are not yet implemented.
+### AWS Lightsail
 
-The bot uses Guilds intent only, slash commands and buttons; it does not read ordinary chat messages. No privileged Message Content or Server Members intents are required.
+The Node.js blueprint with an `admin` user and `/usr/bin/node` is supported by `squash-club-bot.service`. Clone the repo into `/home/admin/squash-club-bot`, create `data/` and a mode-600 `.env`, then install the unit into `/etc/systemd/system/`. Use `systemctl enable --now squash-club-bot` to enable automatic startup. Stop a local development copy before starting the cloud copy. Keep private backups outside GitHub. Updating GitHub does not automatically deploy to this instance.
+
+### Railway alternative
+
+The Dockerfile copies only runtime files. Set variables in Railway and attach a persistent volume at `/app/data`. Use one replica and disable sleeping. No public HTTP endpoint is needed for the Gateway connection.
+
+## Verification
+
+`npm test` covers cutoff boundaries, 24-hour and session-start expiration, retained fee responsibility, competing and multiple claims, explicit waitlist consent, unauthorized claims, restart recovery and timezone validation.
+
+No privileged Message Content or Server Members intents are used. Ordinary chat messages are not read. All current session messages are marked as a demo; do not send real payments.
