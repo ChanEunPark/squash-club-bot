@@ -54,3 +54,11 @@ The Dockerfile copies only runtime files. Set variables in Railway and attach a 
 `npm test` covers cutoff boundaries, 24-hour and session-start expiration, retained fee responsibility, competing and multiple claims, explicit waitlist consent, unauthorized claims, restart recovery and timezone validation.
 
 No privileged Message Content or Server Members intents are used. Ordinary chat messages are not read. All current session messages are marked as a demo; do not send real payments.
+
+## Organizer-only testing
+
+Use `/test` in the server (Manage Server or Administrator permission required). Choose a Wednesday, headcount preset, your role, and before/after cutoff, then confirm Apply test. The test is an isolated copy, visible only to its owner via the normal Sign up / My status / Cancel registration actions. It never overwrites the Wednesday's real registrations.
+
+Presets: empty (0/0), one spot left (7/0), full (8/0), replacement (8/2). Headcounts include your selected role; an otherwise missing role adds one slot and the preview shows final counts. Fictional participants do not receive network messages. Real owner DMs use the same delivery path as normal sessions.
+
+Run `/test` again for controls: simulate a fictional player's cancellation, let a fictional waiter accept first, fast-forward open search deadlines, change the preset, or archive/reset your test. Reset requires confirmation and preserves real bookings. Previous test copies are retained as archived data and their old actions are rejected. The public roster remains the normal Wednesday roster; personal test results are labeled TEST.
