@@ -30,3 +30,5 @@ test('skip and expired/invalid modal submissions do not cancel registration or s
 test('test panel stays within Discord content and component limits with forecast scenario controls',async()=>{
  const {bot,s}=await harness();const data=bot.testControls({...s,organizerId:'person'});assert.ok(data.content.length<=2000,`panel length ${data.content.length}`);assert.equal(data.components.length,5);assert.ok(data.components.every(r=>r.components.length<=5));
 });
+
+test('My status overview offers evidence for each waitlisted session',async()=>{const {bot,s,requests,interaction}=await harness();s.waitlist.push({id:'person'});await bot.handle(interaction('status'));const response=requests.filter(r=>r.body?.embeds).at(-1).body;const buttons=response.components.flatMap(r=>r.components);assert.ok(buttons.some(b=>b.custom_id==='forecast-info:'+s.id&&b.label==='About this estimate'));assert.ok(buttons.some(b=>b.custom_id==='status:'+s.id));});
