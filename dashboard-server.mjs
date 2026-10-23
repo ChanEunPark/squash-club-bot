@@ -1,9 +1,8 @@
 import http from 'node:http';
 import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
-import {fileURLToPath} from 'node:url';
+import {DEMO_PLAYER_NAMES as names} from './testing.mjs';
 import {nextTwo} from './schedule.mjs';
-const names=['Alex Morgan','Jamie Lee','Taylor Kim','Sam Chen','Jordan Rivera','Casey Patel','Riley Davis','Morgan Park','Jamie Brooks','Robin Ellis','Alexis Reed','Avery Brooks','Drew Wilson'];
 function publicName(p){if(!p)return 'Player';if(String(p.id).startsWith('fake-')){const index=Number(String(p.id).match(/-(\d+)$/)?.[1]||0)+(String(p.id).includes('waiter')?8:0);return names[index%names.length];}return String(p.name||'Club member').slice(0,100);}
 const key=value=>createHash('sha256').update(String(value)).digest('hex').slice(0,16);
 export function dashboardSnapshot(state,config={},now=Date.now()){
