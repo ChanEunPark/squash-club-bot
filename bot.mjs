@@ -1,3 +1,4 @@
+import {createDashboardServer} from './dashboard-server.mjs';
 import {predictOutlook,parseDeadline,cutoffOutlookRecipients} from './forecast.mjs';
 import {explainOutlook} from './outlook-ai.mjs';
 import {finalizeBilling} from './billing.mjs';
@@ -152,7 +153,7 @@ function demoAction(id,action,key){const d=state.demos[id];if(!d||d.key!==key)th
  return msg(action==='accept'?'**You’re confirmed**\nYour booking replaces Alex’s.\n\n**Your DM — preview:** Contact Alex’s Discord profile and send the stated fee directly.\n**Alex’s DM — preview:** You replaced Alex; Alex receives your Discord contact and the amount to receive.\n\nNo actual payment or messages to fictional players.':'**Sam accepted first**\nYou stay on the waitlist. The old offer is closed. Alex and Sam receive separate settlement DMs in real use.',[row(btn(`closed:${key}`,'Spot filled',2,true),btn('demo-start','Try again',2))]);
 }
 function sessionsFor(id){return upcoming();}
-function controlPanel(){return msg('**Test controls**\nRun /test to configure a scenario. Reset clears all bookings, waitlists, replacement searches, and demo/test states across all sessions. It does not delete channel messages.',[row(btn('test','Open test setup',3),btn('reset-all','Reset all data',4))]);}
+function controlPanel(){const links=env.DASHBOARD_URL?[row({type:2,style:5,label:'Open organizer dashboard ↗',url:env.DASHBOARD_URL})]:[];return msg('**Test controls**\nRun /test to configure a scenario. Reset clears all bookings, waitlists, replacement searches, and demo/test states across all sessions. It does not delete channel messages.',[row(btn('test','Open test setup',3),btn('reset-all','Reset all data',4)),...links]);}
 function testControls(t,notice=''){
  const closed=Date.now()>=t.cutoffAt,searches=t.openings.filter(o=>o.status==='open'&&o.expiresAt>Date.now()).length;
  return msg(`**Organizer test controls**\nShared demo session · no real booking or payment.\n${details(t)}\nConfirmed: **${t.members.length}/${t.capacity}** · Waiting: **${t.waitlist.length}**\nYour status: **${status(t,t.organizerId)}**\nRegistration: **${closed?'Closed':'Open'}** · Active replacement searches: **${searches}**\n${notice?`\n✅ ${notice}\n`:''}
@@ -309,6 +310,8 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   throw Error('This button is outdated. Use the current session panel or /demo.');
  }catch(e){await reply(msg(e.message)).catch(()=>{});console.log('Action could not complete; no credentials logged.');}
 }
+const dashboardServer=env.DASHBOARD_PORT?createDashboardServer({getState:()=>state,config:{guildId:env.DISCORD_GUILD_ID,channelId:env.DISCORD_SESSION_CHANNEL_ID}}):null;
+if(dashboardServer){dashboardServer.on('error',()=>console.log('Dashboard server unavailable.'));dashboardServer.listen(Number(env.DASHBOARD_PORT),env.DASHBOARD_HOST||'127.0.0.1',()=>console.log('Organizer dashboard listening.'));}
 let sequence=null,sessionId=null,resumeUrl=null,connection,heartbeat,ack=true,stopped=false;
 function connect(){
  const ws=new WebSocket(`${resumeUrl||'wss://gateway.discord.gg'}/?v=10&encoding=json`);connection=ws;
