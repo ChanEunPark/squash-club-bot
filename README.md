@@ -83,3 +83,14 @@ OpenAI explains the computed result; it never generates the probability or time 
 Run `node --test` to verify model behavior, Eastern-time parsing, privacy boundaries, failure fallback, and the mocked Discord waitlist → deadline modal → outlook → status flow. Mocked tests do not replace a real Discord/OpenAI integration check.
 
 At cutoff, each currently waitlisted real account receives one proactive outlook DM per session. A persisted marker prevents repeat sends on restart; notifications are queued independently of billing. If no personal deadline is saved, this notice explicitly estimates through session start. Players who became confirmed, left, or whose session was reset before delivery are skipped. Low probabilities remain honest, followed by encouragement to keep the waitlist place and watch for offers. AI validation failures get one regeneration attempt, while genuine failures remain labelled as statistical fallback.
+
+
+## Organizer dashboard
+
+The read-only dashboard follows the Figma design and reads the bot's in-memory canonical sessions. It refreshes every 30 seconds and on page reload or the refresh button. Confirmed, waitlisted, and completed cancellations have separate tabs; post-cutoff cancellation requests remain confirmed until replaced. Fictional preset players have readable demo names and a Demo player label. No standalone sample bookings are added to live data.
+
+Set `DASHBOARD_PORT=3000` and `DASHBOARD_HOST=127.0.0.1` on the bot, then reverse proxy the public web endpoint to that port. Set `DASHBOARD_URL` to that public URL and run `node --env-file=.env bot.mjs --publish` to add an Open organizer dashboard link to the test-controls panel. The dashboard has no login by request. The public API exposes display names, session times, status, and activity only; Discord user IDs, tokens, contact information, billing recipients, and private forecast preferences are excluded. Only GET and HEAD are supported. The API never changes registrations or sends notifications.
+
+New registration/cancellation events are recorded from this version onward. Existing filled searches are reconstructed where available; unknown historical registration timestamps are shown as unavailable rather than invented. Test reset clears the corresponding dashboard records along with bot data.
+
+For a local preview using isolated fictional data: `node scripts/preview-dashboard.mjs`, then open http://127.0.0.1:4380. This does not connect to Discord or alter live data.
