@@ -53,8 +53,8 @@ export function clubInsights(s,deadline,now=Date.now(),data=history){
   evidence:`Lineup cancellation tendency: ${pct(rosterRate)}% vs club baseline ${pct(baseline)}% (recency-adjusted, with an overall prior for sparse profiles).`,
   implication:delta<-.03?'Fewer cancellations from this lineup can limit new openings, even if there is plenty of time left.':delta>.03?'This lineup can create more opportunities than a steadier lineup, but an opening is not a confirmed booking.':'The lineup itself offers little advantage relative to the club baseline.'});
  if(futurePattern.length)findings.push({id:'deadline-overlap',direction:overlap<.5?'limits':'supports',priority:overlap<.5?5:2,
-  observation:overlap<.5?'Most still-relevant cancellation timings from past records fall after the user’s deadline.':'Most still-relevant cancellation timings from past records fall before the user’s deadline.',
-  evidence:`${beforeDeadline} of ${futurePattern.length} still-relevant historical cancellation timings fall before your deadline when aligned to this session.`,
+  observation:overlap<.5?'Most still-relevant cancellation timings from past records fall after the user’s chosen time.':'Most still-relevant cancellation timings from past records fall before the user’s chosen time.',
+  evidence:`${beforeDeadline} of ${futurePattern.length} still-relevant historical cancellation timings fall before your chosen time when aligned to this session.`,
   implication:overlap<.5?'A later opening would not help the user make plans by their selected time.':'There is still time for historically typical opportunities, but their occurrence is uncertain.'});
  if(canceled.length)findings.push({id:'cancellation-timing',direction:'context',priority:now>=s.cutoffAt?3:2,
   observation:afterCutoff>canceled.length/2?'In past club records, most cancellations happened after registration closed.':'In past club records, cancellations were not predominantly after registration closed.',
@@ -135,7 +135,7 @@ export function parseDeadline(value,startsAt,now=Date.now()){
  for(let i=0;i<4;i++){const p=parts(utc);utc+=target-Date.UTC(p.year,p.month-1,p.day,p.hour,p.minute);}
  const p=parts(utc);if(p.year!==y||p.month!==m||p.day!==d||p.hour!==h||p.minute!==min)throw Error('That local date/time does not exist. Choose another time.');
  const alternate=parts(utc+HOUR);if(alternate.year===y&&alternate.month===m&&alternate.day===d&&alternate.hour===h&&alternate.minute===min)throw Error('That Eastern time occurs twice during the clock change. Choose a different hour.');
- if(utc<=now||utc>startsAt)throw Error('Choose a future deadline no later than the session start.');return utc;
+ if(utc<=now||utc>startsAt)throw Error('Choose a future time no later than the session start.');return utc;
 }
 
 // Persisted once-per-session boundary event. No catch-up messages for sessions already started.
