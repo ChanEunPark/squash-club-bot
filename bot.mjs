@@ -93,7 +93,7 @@ async function drain(){if(draining)return;draining=true;try{
         if(!session||session.testRetired||session.startsAt<=Date.now()||!session.waitlist.some(p=>p.id===j.recipient)){state.jobs=state.jobs.filter(x=>x.key!==j.key);save();continue;}
         const text=await outlookText(session,j.recipient,{useSessionStart:true});
         if(state.sessions[j.sessionId]!==session||!state.jobs.some(x=>x.key===j.key)||!session.waitlist.some(p=>p.id===j.recipient))continue;
-        const data=msg(`**Registration has closed — your waitlist update**\n${details(session)}\n\nYou are still on the waitlist. No need to keep checking My status.`,[row(btn(liveId('status',session),'View my status',2),btn(liveId('forecast-time',session),'Choose / change my time',2),btn(liveId('forecast-info',session),'▸ Why this estimate?',2))]);
+        const data=msg(`**Registration has closed — your waitlist update**\n${details(session)}\n\nYou are still on the waitlist. No need to keep checking My status.`,[row(btn(liveId('status',session),'View my status',2),btn(liveId('forecast-time',session),'Choose / change my time',2),btn(liveId('forecast-info',session),'Why this estimate?',2))]);
         data.embeds=[{description:text,color:0x5865f2}];await dm(j.recipient,data);
       }else if(j.type==='edit')await api(`/channels/${j.ref.channel}/messages/${j.ref.id}`,'PATCH',j.data);
       else await dm(j.recipient,j.data);
@@ -220,7 +220,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
     const budget=Math.max(0,5800-embeds.reduce((n,e)=>n+JSON.stringify(e).length,0)-title.length-method.length-30);
     embeds.push({title,description:evidence.slice(0,Math.min(3000,budget))+'\n\n'+method,color:0x5865f2});
    }
-   const components=(i.message.components||[]).map(r=>({type:1,components:r.components.map(b=>b.custom_id===`forecast-${action==='forecast-info'?'info':'hide'}:${sid}`?{type:2,style:2,custom_id:liveId(action==='forecast-info'?'forecast-hide':'forecast-info',s),label:action==='forecast-info'?'▾ Hide details':'▸ Why this estimate?'}:b)}));
+   const components=(i.message.components||[]).map(r=>({type:1,components:r.components.map(b=>b.custom_id===`forecast-${action==='forecast-info'?'info':'hide'}:${sid}`?{type:2,style:2,custom_id:liveId(action==='forecast-info'?'forecast-hide':'forecast-info',s),label:action==='forecast-info'?'Hide details':'Why this estimate?'}:b)}));
    await api(`/interactions/${i.id}/${i.token}/callback`,'POST',{type:7,data:{embeds,components,allowed_mentions:{parse:[]}}});return;
   }
  }
@@ -259,7 +259,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    const next=sessionsFor(p.id);
    const extra=Object.values(state.sessions).filter(s=>!s.testRetired&&(!s.testOwner||s.testOwner===p.id)&&s.startsAt>Date.now()&&!next.some(n=>n.id===s.id)&&(s.members.some(u=>u.id===p.id)||s.waitlist.some(u=>u.id===p.id)));
    const sessions=[...next,...extra].slice(0,5);
-   const actions=sessions.map(s=>{const waiting=s.waitlist.some(u=>u.id===p.id),booked=s.members.some(u=>u.id===p.id);const buttons=[btn(liveId(waiting?'status':booked?'cancel':'signup',s),`${shortDate(s)} · ${waiting?'View status':booked?'Cancel booking':'Book'}`,waiting?2:booked?4:3)];if(waiting)buttons.push(btn(liveId('forecast-info',s),'▸ Why this estimate?',2));return row(...buttons);});
+   const actions=sessions.map(s=>{const waiting=s.waitlist.some(u=>u.id===p.id),booked=s.members.some(u=>u.id===p.id);const buttons=[btn(liveId(waiting?'status':booked?'cancel':'signup',s),`${shortDate(s)} · ${waiting?'View status':booked?'Cancel booking':'Book'}`,waiting?2:booked?4:3)];if(waiting)buttons.push(btn(liveId('forecast-info',s),'Why this estimate?',2));return row(...buttons);});
    const data=msg('**My status**\nOnly you can see this. All times: America/New_York.',actions);
    data.embeds=await Promise.all(sessions.map(async s=>({title:shortDate(s),description:`${details(s)}\n\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\nYour status: **${status(s,p.id)}**${s.waitlist.some(u=>u.id===p.id)?`\n\n${await outlookText(s,p.id)}`:''}`,color:s.waitlist.some(u=>u.id===p.id)?0xe9b949:s.members.some(u=>u.id===p.id)?0x33a474:0x8792a2})));
    await reply(data);return;
@@ -285,7 +285,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
   if(a==='forecast-method'){await reply(msg('**How this demo estimate works**\nWe simulate possible cancellations from fictional participant histories, weighted toward recent records and adjusted toward the overall average when histories are sparse. Before cutoff, waitlist order applies. After cutoff, synthetic response times model first-acceptance competition.\nAll current accounts are assigned mock historical profiles for this demo; these are not their real attendance records. The scenario range changes cancellation assumptions by ±25%; it is not a confidence interval. The confirmation window is conditional on confirmation by your chosen time.\nOpenAI receives only your relative time constraint and aggregate model results—not names, Discord IDs, payment details, or per-member histories. AI explains the forecast; it does not calculate probabilities.'));return;}
    const text=await outlookText(s,p.id);
    if(state.sessions[s.id]!==s||!s.waitlist.some(u=>u.id===p.id))throw Error('Your registration changed while the outlook was loading. Check My status again.');
-   const data=msg('Your chosen time is saved. Your waitlist registration is unchanged.',[row(btn(liveId('forecast-time',s),'Change my time',2),btn(liveId('forecast-info',s),'▸ Why this estimate?',2))]);data.embeds=[{description:text,color:0x5865f2}];await reply(data);return;
+   const data=msg('Your chosen time is saved. Your waitlist registration is unchanged.',[row(btn(liveId('forecast-time',s),'Change my time',2),btn(liveId('forecast-info',s),'Why this estimate?',2))]);data.embeds=[{description:text,color:0x5865f2}];await reply(data);return;
   }
   const send=async data=>{await dm(p.id,data);await reply(msg('📩 Check your DMs from Squash Club Bot.'));};
   if(a==='signup'||a==='join'){
@@ -320,7 +320,7 @@ async function handle(i){const p=person(i);if(i.guild_id&&i.guild_id!==env.DISCO
    const handoffs=s.openings.filter(o=>o.status==='filled'&&(o.winner.id===p.id||o.canceled.id===p.id)).map(o=>{const receiving=o.canceled.id===p.id,other=receiving?o.winner:o.canceled;return `${receiving?'Receive':'Send'} ${s.fee} · ${other.name}\n${isFictional(other.id)?'Fictional player — no payment needed':`https://discord.com/users/${other.id}`}`;});
    const offers=s.openings.filter(o=>o.status==='open'&&o.eligible.includes(p.id)&&s.waitlist.some(w=>w.id===p.id));
    const components=offers.slice(0,3).map(o=>row(btn(`accept:${s.id}:${o.id}`,'Accept available spot',3)));
-   const waiting=s.waitlist.some(u=>u.id===p.id);if(waiting)components.push(row(btn(liveId('forecast-time',s),s.outlookPreferences?.[p.id]?'Change my time':'Choose a time',2),btn(liveId('forecast-info',s),'▸ Why this estimate?',2)));
+   const waiting=s.waitlist.some(u=>u.id===p.id);if(waiting)components.push(row(btn(liveId('forecast-time',s),s.outlookPreferences?.[p.id]?'Change my time':'Choose a time',2),btn(liveId('forecast-info',s),'Why this estimate?',2)));
    const data=msg(`**My status: ${status(s,p.id)}**\n${details(s)}\nConfirmed: **${s.members.length}/${s.capacity}** · Waitlist: **${s.waitlist.length}**\n\n${handoffs.join('\n')}\nDemo only — no payment.`,components);
    if(waiting)data.embeds=[{description:await outlookText(s,p.id),color:0x5865f2}];await reply(data);return;
   }
