@@ -1,0 +1,5 @@
+# Replace this hostname with the public dashboard domain.
+your-dashboard.example.com {
+    encode zstd gzip
+    reverse_proxy 127.0.0.1:3000
+}
