@@ -5,8 +5,8 @@ export function makeTestSession(source,{preset,role,phase},user,now=Date.now()){
  if(!counts[preset]||!['participant','waiter','none'].includes(role)||!['before','after'].includes(phase))throw Error('Invalid test setup.');
  const [members,waiters]=counts[preset];
  const s=newSession({title:`TEST · ${source.title}`,location:source.location,fee:source.fee,capacity:8,startsAt:Math.max(source.startsAt,now+2*86400000),endsAt:Math.max(source.startsAt,now+2*86400000)+7200000,cutoffAt:phase==='before'?now+86400000:now-1000,testOwner:user.id,sourceId:source.id,testPhase:phase});
- for(let n=0;n<Math.max(members,role==='participant'?1:0);n++)s.members.push(n===0&&role==='participant'?user:{id:`fake-member-${s.id}-${n}`,name:`Test player ${n+1} (fictional)`});
- for(let n=0;n<Math.max(waiters,role==='waiter'?1:0);n++)s.waitlist.push(n===0&&role==='waiter'?user:{id:`fake-waiter-${s.id}-${n}`,name:`Test waiter ${n+1} (fictional)`});
+ for(let n=0;n<Math.max(members,role==='participant'?1:0);n++)s.members.push(n===0&&role==='participant'?{...user,registeredAt:now,confirmedAt:now}:{registeredAt:now,confirmedAt:now,id:`fake-member-${s.id}-${n}`,name:`Test player ${n+1} (fictional)`});
+ for(let n=0;n<Math.max(waiters,role==='waiter'?1:0);n++)s.waitlist.push(n===0&&role==='waiter'?{...user,registeredAt:now}:{registeredAt:now,id:`fake-waiter-${s.id}-${n}`,name:`Test waiter ${n+1} (fictional)`});
  return s;
 }
 export function simulateCancellation(s,now=Date.now()){const p=s.members.find(p=>isFictional(p.id));if(!p)throw Error('No fictional confirmed player is available. Choose a preset with more players.');return cancel(s,p.id,now);}
